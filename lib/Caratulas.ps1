@@ -4,7 +4,7 @@
 #  Prioridad de origen:
 #    1. Catalogo publico de la Microsoft Store (sin API key) via StoreId
 #       -> Poster 1440x2160, SuperHeroArt 3840x2160, TitledHeroArt, Logo
-#    2. SteamGridDB, si el usuario ha dejado su clave en sgdb.key
+#    2. SteamGridDB, si el usuario ha puesto su clave en Ajustes (config.json)
 #    3. Assets locales del propio juego (splash + logo), compuestos
 #
 #  Nombres que espera Steam en config\grid\:
@@ -68,35 +68,69 @@ function Find-StoreId {
 }
 
 # ---------------------------------------------------------------------
-#  SteamGridDB (opcional: sgdb.key junto a la app)
+#  SteamGridDB (opcional: clave en config.json, se pone desde Ajustes)
 # ---------------------------------------------------------------------
 function Get-SgdbClave {
+    $clave = (Get-Config)['SgdbClave']
+    if ($clave) { return [string]$clave }
+    # la primera version la leia de sgdb.key junto a la app: se pasa a config.json
     $f = Join-Path $PSScriptRoot '..\sgdb.key'
-    if (Test-Path $f) { return (Get-Content $f -Raw).Trim() }
+    if (Test-Path -LiteralPath $f) {
+        $txt = Get-Content -LiteralPath $f -Raw
+        if ($txt -and $txt.Trim()) {
+            $clave = $txt.Trim()
+            try {
+                Set-ConfigValor -Nombre 'SgdbClave' -Valor $clave
+                Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+            } catch { }
+            return $clave
+        }
+    }
     return $null
 }
 
+# Hace una busqueda de prueba para saber si la clave vale
+function Test-SgdbClave {
+    param([Parameter(Mandatory)][string]$Clave)
+    Initialize-Tls
+    try {
+        [void](Invoke-RestMethod -Uri 'https://www.steamgriddb.com/api/v2/search/autocomplete/portal' `
+                -Headers @{ Authorization = "Bearer $Clave" } -TimeoutSec 20)
+        return [pscustomobject]@{ Ok = $true; Mensaje = 'La clave funciona.' }
+    } catch {
+        $resp = $_.Exception.Response
+        if ($resp -and [int]$resp.StatusCode -eq 401) {
+            return [pscustomobject]@{ Ok = $false; Mensaje = 'SteamGridDB rechaza la clave. Revisa que esté bien copiada.' }
+        }
+        return [pscustomobject]@{ Ok = $false; Mensaje = "No se ha podido comprobar: $($_.Exception.Message)" }
+    }
+}
+
 function Get-SgdbImagenes {
-    param([Parameter(Mandatory)][string]$Nombre)
+    param([Parameter(Mandatory)][string]$Nombre, [scriptblock]$Log = $null)
+    function Registrar($m) { if ($Log) { & $Log $m } }
     $clave = Get-SgdbClave
-    if (-not $clave) { return $null }
+    if (-not $clave) { Registrar '  sin clave de SteamGridDB (se pone en Ajustes), me lo salto'; return $null }
     Initialize-Tls
     $h = @{ Authorization = "Bearer $clave" }
     try {
         $b = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/search/autocomplete/$([uri]::EscapeDataString($Nombre))" -Headers $h -TimeoutSec 20
-        if (-not $b.data -or $b.data.Count -eq 0) { return $null }
+        if (-not $b.data -or $b.data.Count -eq 0) { Registrar "  SteamGridDB no conoce '$Nombre'"; return $null }
         $id = $b.data[0].id
         $res = @{}
-        $g = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/grids/game/$id?dimensions=600x900" -Headers $h -TimeoutSec 20
+        $g = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/grids/game/${id}?dimensions=600x900" -Headers $h -TimeoutSec 20
         if ($g.data.Count) { $res['Poster'] = $g.data[0].url }
-        $g2 = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/grids/game/$id?dimensions=460x215" -Headers $h -TimeoutSec 20
+        $g2 = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/grids/game/${id}?dimensions=460x215" -Headers $h -TimeoutSec 20
         if ($g2.data.Count) { $res['Capsule'] = $g2.data[0].url }
         $hr = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/heroes/game/$id" -Headers $h -TimeoutSec 20
         if ($hr.data.Count) { $res['Hero'] = $hr.data[0].url }
         $lg = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/logos/game/$id" -Headers $h -TimeoutSec 20
         if ($lg.data.Count) { $res['Logo'] = $lg.data[0].url }
         return $res
-    } catch { return $null }
+    } catch {
+        Registrar "  SteamGridDB ha fallado: $($_.Exception.Message)"
+        return $null
+    }
 }
 
 # ---------------------------------------------------------------------
@@ -196,7 +230,7 @@ function New-CaratulaCompuesta {
 function Save-Png {
     param([System.Drawing.Bitmap]$Bitmap, [string]$Ruta)
     $dir = Split-Path $Ruta -Parent
-    if (-not (Test-Path $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
+    if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
     $Bitmap.Save($Ruta, [System.Drawing.Imaging.ImageFormat]::Png)
 }
 
@@ -206,8 +240,8 @@ function Save-Png {
 function Get-AssetsLocales {
     param([string]$Carpeta, [string]$Icono)
     $r = @{ Fondo = $null; Logo = $null }
-    if ($Carpeta -and (Test-Path $Carpeta)) {
-        $pngs = Get-ChildItem $Carpeta -Filter *.png -ErrorAction SilentlyContinue
+    if ($Carpeta -and (Test-Path -LiteralPath $Carpeta)) {
+        $pngs = Get-ChildItem -LiteralPath $Carpeta -Filter *.png -ErrorAction SilentlyContinue
         $splash = $pngs | Where-Object { $_.Name -match 'splash|hero|background|key_?art' } |
                   Sort-Object Length -Descending | Select-Object -First 1
         if (-not $splash) { $splash = $pngs | Where-Object { $_.Length -gt 300000 } | Sort-Object Length -Descending | Select-Object -First 1 }
@@ -217,7 +251,7 @@ function Get-AssetsLocales {
                 Sort-Object Length -Descending | Select-Object -First 1
         if ($logo) { $r.Logo = Get-BitmapDesdeArchivo -Ruta $logo.FullName }
     }
-    if (-not $r.Logo -and $Icono -and (Test-Path $Icono)) { $r.Logo = Get-BitmapDesdeArchivo -Ruta $Icono }
+    if (-not $r.Logo -and $Icono -and (Test-Path -LiteralPath $Icono)) { $r.Logo = Get-BitmapDesdeArchivo -Ruta $Icono }
     return $r
 }
 
@@ -234,7 +268,7 @@ function New-CaratulasSteam {
     )
     function Registrar($m) { if ($Log) { & $Log $m } }
     if (-not $NombreFinal) { $NombreFinal = $Juego.Nombre }
-    if (-not (Test-Path $GridDir)) { [void](New-Item -ItemType Directory -Path $GridDir -Force) }
+    if (-not (Test-Path -LiteralPath $GridDir)) { [void](New-Item -ItemType Directory -Path $GridDir -Force) }
 
     $origen = 'assets locales'
     $poster = $null; $hero = $null; $capsule = $null; $logo = $null
@@ -264,9 +298,9 @@ function New-CaratulasSteam {
 
     # 2) SteamGridDB
     if (-not $poster) {
-        $sg = Get-SgdbImagenes -Nombre $NombreFinal
+        Registrar "Buscando '$NombreFinal' en SteamGridDB..."
+        $sg = Get-SgdbImagenes -Nombre $NombreFinal -Log $Log
         if ($sg) {
-            Registrar 'Usando SteamGridDB...'
             if ($sg['Poster'])  { $poster  = Get-BitmapDesdeUrl $sg['Poster'] }
             if ($sg['Hero'])    { $hero    = Get-BitmapDesdeUrl $sg['Hero'] }
             if ($sg['Capsule']) { $capsule = Get-BitmapDesdeUrl $sg['Capsule'] }

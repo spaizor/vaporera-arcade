@@ -97,9 +97,10 @@ Por orden de preferencia:
 1. **Microsoft Store.** Los juegos de Xbox / Game Pass indican su identificador de la Store
    en `MicrosoftGame.config`. Con él, el catálogo público de la Store devuelve el arte oficial
    del juego sin necesidad de claves. En los juegos de otros orígenes se busca por el nombre.
-2. **SteamGridDB** (opcional). Si creas un fichero `sgdb.key` en la carpeta de la aplicación
-   con tu clave de API de [SteamGridDB](https://www.steamgriddb.com/profile/preferences/api),
-   se usa cuando la Store no tiene el juego. La clave es gratuita.
+2. **SteamGridDB** (opcional). Se usa cuando la Store no tiene el juego. Necesita una clave de
+   API, que es gratuita: consíguela en tu [perfil de SteamGridDB](https://www.steamgriddb.com/profile/preferences/api),
+   pulsa **Ajustes…** en la aplicación, pégala y usa **Probar** para comprobar que funciona.
+   Se guarda en `%LOCALAPPDATA%\VaporeraArcade\config.json`, fuera de la carpeta de la aplicación.
 3. **Imágenes del propio juego.** Si no hay nada más, compone las carátulas con el fondo y el
    logo que trae el juego instalado.
 
@@ -150,6 +151,7 @@ Vaporera Arcade
 ├── VaporeraArcade.ps1           aplicación: ventana WPF y modo consola
 ├── Vaporera Arcade.vbs          lanzador sin ventana de consola
 └── lib
+    ├── Config.ps1               ajustes del usuario (config.json en %LOCALAPPDATA%)
     ├── Vdf.ps1                  lectura y escritura del formato VDF binario y cálculo del appid
     ├── Fuentes.ps1              detección de juegos según su origen
     ├── Caratulas.ps1            descarga y composición de carátulas

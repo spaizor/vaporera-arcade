@@ -32,26 +32,26 @@ function New-Juego {
 function Get-JuegosXbox {
     $res = @()
     $unidades = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
-                Where-Object { Test-Path (Join-Path $_.Root 'XboxGames') }
+                Where-Object { Test-Path -LiteralPath (Join-Path $_.Root 'XboxGames') }
     foreach ($u in $unidades) {
         $raiz = Join-Path $u.Root 'XboxGames'
-        foreach ($dir in Get-ChildItem $raiz -Directory -ErrorAction SilentlyContinue) {
+        foreach ($dir in Get-ChildItem -LiteralPath $raiz -Directory -ErrorAction SilentlyContinue) {
             if ($dir.Name -eq 'GameSave') { continue }
             $content = Join-Path $dir.FullName 'Content'
             $helper  = Join-Path $content 'gamelaunchhelper.exe'
-            if (-not (Test-Path $helper)) { continue }
+            if (-not (Test-Path -LiteralPath $helper)) { continue }
 
             $nombre = $dir.Name; $storeId = ''; $icono = ''
             $cfg = Join-Path $content 'MicrosoftGame.config'
-            if (Test-Path $cfg) {
+            if (Test-Path -LiteralPath $cfg) {
                 try {
-                    [xml]$x = Get-Content $cfg -Raw -Encoding UTF8
+                    [xml]$x = Get-Content -LiteralPath $cfg -Raw -Encoding UTF8
                     if ($x.Game.ShellVisuals.DefaultDisplayName) { $nombre = $x.Game.ShellVisuals.DefaultDisplayName }
                     if ($x.Game.StoreId) { $storeId = $x.Game.StoreId }
                     foreach ($cand in @($x.Game.ShellVisuals.Square480x480Logo, $x.Game.ShellVisuals.Square150x150Logo, $x.Game.ShellVisuals.StoreLogo)) {
                         if ($cand) {
                             $p = Join-Path $content $cand
-                            if (Test-Path $p) { $icono = $p; break }
+                            if (Test-Path -LiteralPath $p) { $icono = $p; break }
                         }
                     }
                 } catch { }
@@ -59,7 +59,7 @@ function Get-JuegosXbox {
             if (-not $icono) {
                 foreach ($cand in @('Resources\Square480x480Logo.png','MediumLogo.png','Square150x150Logo.png','StoreLogo.png')) {
                     $p = Join-Path $content $cand
-                    if (Test-Path $p) { $icono = $p; break }
+                    if (Test-Path -LiteralPath $p) { $icono = $p; break }
                 }
             }
             $res += New-Juego -Nombre $nombre -Fuente 'Xbox / Game Pass' `
@@ -81,7 +81,7 @@ function Get-JuegosUbisoft {
     $launcherDir = (Get-ItemProperty $lk -ErrorAction SilentlyContinue).InstallDir
     if (-not $launcherDir) { return $res }
     $launcherExe = Join-Path ($launcherDir -replace '/','\') 'UbisoftConnect.exe'
-    if (-not (Test-Path $launcherExe)) { return $res }
+    if (-not (Test-Path -LiteralPath $launcherExe)) { return $res }
     $startDir = (Split-Path $launcherExe -Parent) + '\'
 
     foreach ($k in Get-ChildItem "$lk\Installs" -ErrorAction SilentlyContinue) {
@@ -91,13 +91,13 @@ function Get-JuegosUbisoft {
         $dir = $dir -replace '/','\'
         $nombre = Split-Path $dir.TrimEnd('\') -Leaf
         $icono = ''
-        $exeGrande = Get-ChildItem $dir -Filter *.exe -Recurse -ErrorAction SilentlyContinue |
+        $exeGrande = Get-ChildItem -LiteralPath $dir -Filter *.exe -Recurse -ErrorAction SilentlyContinue |
                      Sort-Object Length -Descending | Select-Object -First 1
         if ($exeGrande) { $icono = $exeGrande.FullName }
         $res += New-Juego -Nombre $nombre -Fuente 'Ubisoft Connect' `
                 -Exe $launcherExe -StartDir $startDir -LaunchOptions "uplay://launch/$id/0" `
                 -Icono $icono -Carpeta $dir -Detalle "URI de Ubisoft (el .exe directo no arranca por DRM)" `
-                -Fecha (Get-Item $dir -ErrorAction SilentlyContinue).LastWriteTime
+                -Fecha (Get-Item -LiteralPath $dir -ErrorAction SilentlyContinue).LastWriteTime
     }
     return $res
 }
@@ -108,12 +108,12 @@ function Get-JuegosUbisoft {
 function Get-JuegosEpic {
     $res = @()
     $man = Join-Path $env:ProgramData 'Epic\EpicGamesLauncher\Data\Manifests'
-    if (-not (Test-Path $man)) { return $res }
-    foreach ($f in Get-ChildItem $man -Filter *.item -ErrorAction SilentlyContinue) {
-        try { $j = Get-Content $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+    if (-not (Test-Path -LiteralPath $man)) { return $res }
+    foreach ($f in Get-ChildItem -LiteralPath $man -Filter *.item -ErrorAction SilentlyContinue) {
+        try { $j = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
         if (-not $j.InstallLocation -or -not $j.LaunchExecutable) { continue }
         $exe = Join-Path $j.InstallLocation $j.LaunchExecutable
-        if (-not (Test-Path $exe)) { continue }
+        if (-not (Test-Path -LiteralPath $exe)) { continue }
         $res += New-Juego -Nombre $j.DisplayName -Fuente 'Epic Games' `
                 -Exe $exe -StartDir ((Split-Path $exe -Parent) + '\') -Icono $exe `
                 -Carpeta $j.InstallLocation -Detalle 'Ejecutable directo del juego' `
@@ -131,8 +131,8 @@ function Get-JuegosGog {
         foreach ($k in Get-ChildItem $base -ErrorAction SilentlyContinue) {
             $p = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
             if (-not $p.path -or -not $p.exe) { continue }
-            $exe = if (Test-Path $p.exe) { $p.exe } else { Join-Path $p.path $p.exe }
-            if (-not (Test-Path $exe)) { continue }
+            $exe = if (Test-Path -LiteralPath $p.exe) { $p.exe } else { Join-Path $p.path $p.exe }
+            if (-not (Test-Path -LiteralPath $exe)) { continue }
             $res += New-Juego -Nombre $p.gameName -Fuente 'GOG' `
                     -Exe $exe -StartDir ((Split-Path $exe -Parent) + '\') -Icono $exe `
                     -Carpeta $p.path -Detalle 'Ejecutable directo del juego'
@@ -201,7 +201,7 @@ function Get-ProgramasRecientes {
                 }
             }
             if ($ruta -match '^\{') { continue }
-            if (-not (Test-Path $ruta)) { continue }
+            if (-not (Test-Path -LiteralPath $ruta)) { continue }
             $hoja = Split-Path $ruta -Leaf
             if ($hoja -match '^(explorer|cmd|powershell|pwsh|regedit|mmc|notepad|taskmgr|control|rundll32|msedge|chrome|firefox|steam|steamwebhelper|EpicGamesLauncher|UbisoftConnect|GalaxyClient)\.exe$') { continue }
             if ($ruta -like "$env:SystemRoot\System32\*" -or $ruta -like "$env:SystemRoot\SysWOW64\*") { continue }

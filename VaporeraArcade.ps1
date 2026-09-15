@@ -12,6 +12,7 @@ param([switch]$Consola, [string]$Juego)
 
 $ErrorActionPreference = 'Stop'
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $Raiz 'lib\Config.ps1')
 . (Join-Path $Raiz 'lib\Vdf.ps1')
 . (Join-Path $Raiz 'lib\Fuentes.ps1')
 . (Join-Path $Raiz 'lib\Caratulas.ps1')
@@ -33,6 +34,12 @@ function Write-RegistroError {
     $pos = $Fallo.InvocationInfo.PositionMessage
     if ($pos) { foreach ($l in ($pos -split "`r?`n")) { if ($l.Trim()) { Write-Registro "    $($l.Trim())" } } }
     if ($Fallo.Exception.InnerException) { Write-Registro "    causa: $($Fallo.Exception.InnerException.Message)" }
+}
+
+# Busqueda de texto sin comodines: con -like un '[' en el filtro da error
+function Test-Contiene {
+    param([string]$Texto, [string]$Buscado)
+    return ($Texto.IndexOf($Buscado, [StringComparison]::OrdinalIgnoreCase) -ge 0)
 }
 
 # =====================================================================
@@ -59,48 +66,69 @@ function Invoke-AnadirJuego {
     if ($Juego.LaunchOptions) { Registrar "Opciones: $($Juego.LaunchOptions)" }
     Registrar "AppId  : $appId"
 
+    # el duplicado se mira antes de cerrar Steam: si no hay nada que escribir, no se cierra
+    if (-not $Reemplazar) {
+        $dup = Test-ShortcutDuplicado -RutaVdf $Steam.Shortcuts -Nombre $Nombre -Exe $Juego.Exe -LaunchOptions $Juego.LaunchOptions
+        if ($null -ne $dup) {
+            Registrar "Ya existe un acceso directo igual (entrada $dup). No se ha tocado nada."
+            return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado' }
+        }
+    }
+
     $estabaAbierto = Test-SteamCorriendo
     if (-not (Stop-SteamYEsperar -SteamExe $Steam.Exe -Log $Log)) {
         Registrar 'ABORTADO: Steam no se ha cerrado. Ciérralo a mano y repite.'
         return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'steam-abierto' }
     }
 
-    $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts
-    if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
+    # a partir de aqui Steam esta cerrado: pase lo que pase, se vuelve a abrir en el finally
+    $escrito = $false
+    try {
+        $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts
+        if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
 
-    $r = Add-SteamShortcut -RutaVdf $Steam.Shortcuts -Nombre $Nombre -Exe $Juego.Exe `
-            -StartDir $Juego.StartDir -Icono $Juego.Icono -LaunchOptions $Juego.LaunchOptions `
-            -Reemplazar:$Reemplazar -Log $Log
-    if (-not $r.Ok) {
-        Registrar "Ya existe un acceso directo igual (entrada $($r.Indice)). No se ha tocado nada."
-        if ($estabaAbierto -and -not $NoReabrirSteam) { Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log }
-        return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado' }
-    }
-
-    # caratulas: o las ya preparadas, o generarlas ahora
-    if ($CaratulasListas -and $CaratulasListas.Count) {
-        # en un PC recien estrenado config\grid\ todavia no existe: hay que crearla
-        if (-not (Test-Path $Steam.GridDir)) {
-            [void](New-Item -ItemType Directory -Path $Steam.GridDir -Force)
-            Registrar "Creada la carpeta config\grid\ (no existía)."
+        $r = Add-SteamShortcut -RutaVdf $Steam.Shortcuts -Nombre $Nombre -Exe $Juego.Exe `
+                -StartDir $Juego.StartDir -Icono $Juego.Icono -LaunchOptions $Juego.LaunchOptions `
+                -Reemplazar:$Reemplazar -Log $Log
+        if (-not $r.Ok) {
+            Registrar "Ya existe un acceso directo igual (entrada $($r.Indice)). No se ha tocado nada."
+            return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado' }
         }
-        $copiadas = 0
-        foreach ($k in $CaratulasListas.Keys) {
-            $origenImg = $CaratulasListas[$k]
-            if (-not (Test-Path $origenImg)) { Registrar "  falta la imagen '$k', me la salto."; continue }
-            $destino = Join-Path $Steam.GridDir (Split-Path $origenImg -Leaf)
-            try { Copy-Item $origenImg $destino -Force; $copiadas++ }
-            catch { Registrar "  no he podido copiar '$k': $($_.Exception.Message)" }
-        }
-        Registrar "Carátulas copiadas a config\grid\ ($copiadas de $($CaratulasListas.Count) imágenes)."
-    } else {
-        $c = New-CaratulasSteam -Juego $Juego -AppId $appId -GridDir $Steam.GridDir -NombreFinal $Nombre -Log $Log
-        Registrar "Carátulas: $($c.Origen)"
-    }
+        $escrito = $true
 
-    if (-not $NoReabrirSteam) { Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log }
-    Registrar "LISTO. '$Nombre' ya está en la biblioteca."
-    return [pscustomobject]@{ Ok = $true; AppId = $appId; Motivo = '' }
+        # caratulas: o las ya preparadas, o generarlas ahora
+        if ($CaratulasListas -and $CaratulasListas.Count) {
+            # en un PC recien estrenado config\grid\ todavia no existe: hay que crearla
+            if (-not (Test-Path -LiteralPath $Steam.GridDir)) {
+                [void](New-Item -ItemType Directory -Path $Steam.GridDir -Force)
+                Registrar "Creada la carpeta config\grid\ (no existía)."
+            }
+            $copiadas = 0
+            foreach ($k in $CaratulasListas.Keys) {
+                $origenImg = $CaratulasListas[$k]
+                if (-not (Test-Path -LiteralPath $origenImg)) { Registrar "  falta la imagen '$k', me la salto."; continue }
+                $destino = Join-Path $Steam.GridDir (Split-Path $origenImg -Leaf)
+                try { Copy-Item -LiteralPath $origenImg -Destination $destino -Force; $copiadas++ }
+                catch { Registrar "  no he podido copiar '$k': $($_.Exception.Message)" }
+            }
+            Registrar "Carátulas copiadas a config\grid\ ($copiadas de $($CaratulasListas.Count) imágenes)."
+        } else {
+            $c = New-CaratulasSteam -Juego $Juego -AppId $appId -GridDir $Steam.GridDir -NombreFinal $Nombre -Log $Log
+            Registrar "Carátulas: $($c.Origen)"
+        }
+
+        Registrar "LISTO. '$Nombre' ya está en la biblioteca."
+        return [pscustomobject]@{ Ok = $true; AppId = $appId; Motivo = '' }
+    } catch {
+        if ($escrito) { Registrar 'El acceso directo ya está escrito, pero algo ha fallado después (ver el error).' }
+        elseif ($bak) { Registrar "Algo ha fallado antes de terminar. Si shortcuts.vdf quedara mal, restaura $(Split-Path $bak -Leaf)." }
+        throw
+    } finally {
+        # tras escribir se abre siempre (el usuario querra verlo); si no, solo si estaba abierto
+        if (-not $NoReabrirSteam -and ($escrito -or $estabaAbierto)) {
+            Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log
+        }
+    }
 }
 
 # =====================================================================
@@ -110,7 +138,7 @@ if ($Consola) {
     $steam = Get-SteamInfo
     if (-not $steam) { Write-Host 'No encuentro la instalación de Steam.' -ForegroundColor Red; exit 1 }
     $todos = Get-TodosLosJuegos -IncluirRecientes -IncluirApps
-    if ($Juego) { $todos = $todos | Where-Object { $_.Nombre -like "*$Juego*" } }
+    if ($Juego) { $todos = $todos | Where-Object { Test-Contiene $_.Nombre $Juego } }
     if (-not $todos) { Write-Host 'Ningún juego detectado con ese filtro.'; exit 1 }
     $i = 0
     $todos | ForEach-Object { Write-Host ("[{0,2}] {1,-45} {2}" -f $i, $_.Nombre, $_.Fuente); $i++ }
@@ -163,10 +191,14 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
     </Grid.ColumnDefinitions>
 
     <!-- cabecera -->
-    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,10">
-      <TextBlock Text="Vaporera Arcade" FontSize="20" FontWeight="SemiBold" Foreground="#FFDC1E23"/>
-      <TextBlock Name="TxtSteam" Text="" FontSize="11" Foreground="#FF8A909B" Margin="0,2,0,0"/>
-    </StackPanel>
+    <Grid Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,10">
+      <StackPanel>
+        <TextBlock Text="Vaporera Arcade" FontSize="20" FontWeight="SemiBold" Foreground="#FFDC1E23"/>
+        <TextBlock Name="TxtSteam" Text="" FontSize="11" Foreground="#FF8A909B" Margin="0,2,0,0"/>
+      </StackPanel>
+      <Button Name="BtnAjustes" Content="Ajustes..." HorizontalAlignment="Right" VerticalAlignment="Center"
+              Padding="10,3" Margin="0"/>
+    </Grid>
 
     <!-- lista -->
     <Grid Grid.Row="1" Grid.Column="0" Margin="0,0,14,0">
@@ -265,7 +297,7 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $win = [Windows.Markup.XamlReader]::Load($reader)
 
 $ctl = @{}
-foreach ($n in @('TxtSteam','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
+foreach ($n in @('TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
                  'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','BtnPreparar','BtnAnadir','TxtOrigenArte',
                  'ImgPortada','ImgCapsula','ImgHero','ChkBigPicture','ChkReemplazar','TxtLog')) {
     $ctl[$n] = $win.FindName($n)
@@ -293,7 +325,7 @@ function Update-Interfaz {
 
 function Get-ImagenSegura {
     param([string]$Ruta)
-    if (-not $Ruta -or -not (Test-Path $Ruta)) { return $null }
+    if (-not $Ruta -or -not (Test-Path -LiteralPath $Ruta)) { return $null }
     $bi = New-Object Windows.Media.Imaging.BitmapImage
     $bi.BeginInit()
     $bi.CacheOption = [Windows.Media.Imaging.BitmapCacheOption]::OnLoad
@@ -306,7 +338,7 @@ function Get-ImagenSegura {
 function Update-Lista {
     $filtro = $ctl.TxtBuscar.Text.Trim()
     $vista = $script:Todos
-    if ($filtro) { $vista = $vista | Where-Object { $_.Nombre -like "*$filtro*" -or $_.Exe -like "*$filtro*" } }
+    if ($filtro) { $vista = $vista | Where-Object { (Test-Contiene $_.Nombre $filtro) -or (Test-Contiene $_.Exe $filtro) } }
     $ctl.LstJuegos.ItemsSource = @($vista)
 }
 
@@ -341,7 +373,84 @@ function Clear-Preview {
     $ctl.TxtOrigenArte.Text = ''
 }
 
+# Ventana de ajustes: por ahora solo la clave de SteamGridDB
+function Show-Ajustes {
+    [xml]$xamlAjustes = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Ajustes" Width="520" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="#FF15171B">
+  <Window.Resources>
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#FF262A31"/>
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="BorderBrush" Value="#FF3A3F49"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Margin" Value="8,0,0,0"/>
+    </Style>
+  </Window.Resources>
+  <StackPanel Margin="16">
+    <TextBlock Text="SteamGridDB" FontSize="15" FontWeight="SemiBold"/>
+    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#FF8A909B" Margin="0,4,0,12">
+      Opcional. Se usa para las carátulas de los juegos que no están en la Microsoft Store.
+      La clave es gratuita: <Hyperlink Name="LnkSgdb" NavigateUri="https://www.steamgriddb.com/profile/preferences/api"
+      Foreground="#FF6FA8FF">consíguela en tu perfil de SteamGridDB</Hyperlink>.
+    </TextBlock>
+    <TextBlock Text="Clave de API" FontSize="11" Foreground="#FF8A909B"/>
+    <TextBox Name="TxtClave" Height="28" Margin="0,3,0,8" Padding="4,0" FontFamily="Consolas"
+             Background="#FF1E2127" Foreground="#FFE6E8EC" BorderBrush="#FF3A3F49"
+             VerticalContentAlignment="Center"/>
+    <TextBlock Name="TxtEstado" FontSize="11" TextWrapping="Wrap" MinHeight="15" Margin="0,0,0,14"
+               Foreground="#FF8A909B"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Name="BtnProbar" Content="Probar"/>
+      <Button Name="BtnGuardar" Content="Guardar" Background="#FF7A1418" IsDefault="True"/>
+      <Button Name="BtnCancelar" Content="Cancelar" IsCancel="True"/>
+    </StackPanel>
+  </StackPanel>
+</Window>
+'@
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xamlAjustes))
+    $dlg.Owner = $win
+    $txtClave  = $dlg.FindName('TxtClave')
+    $txtEstado = $dlg.FindName('TxtEstado')
+    $brocha    = New-Object Windows.Media.BrushConverter
+
+    $claveAntes = [string](Get-SgdbClave)
+    $txtClave.Text = $claveAntes
+
+    $dlg.FindName('LnkSgdb').Add_RequestNavigate({ Start-Process $_.Uri.AbsoluteUri })
+    $dlg.FindName('BtnProbar').Add_Click({
+        $clave = $txtClave.Text.Trim()
+        if (-not $clave) { $txtEstado.Text = 'Escribe una clave para probarla.'; return }
+        $txtEstado.Foreground = $brocha.ConvertFromString('#FF8A909B')
+        $txtEstado.Text = 'Probando...'
+        Update-Interfaz
+        $r = Test-SgdbClave -Clave $clave
+        $txtEstado.Foreground = $brocha.ConvertFromString($(if ($r.Ok) { '#FF9CD1A0' } else { '#FFE07A7A' }))
+        $txtEstado.Text = $r.Mensaje
+    })
+    $dlg.FindName('BtnGuardar').Add_Click({ $dlg.DialogResult = $true })
+
+    if (-not $dlg.ShowDialog()) { return }
+    $clave = $txtClave.Text.Trim()
+    if ($clave -eq $claveAntes) { return }
+    try {
+        Set-ConfigValor -Nombre 'SgdbClave' -Valor $clave
+        if ($clave) { Add-Log 'Clave de SteamGridDB guardada.' } else { Add-Log 'Clave de SteamGridDB borrada.' }
+    } catch {
+        Add-Log "ERROR guardando los ajustes: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'guardar ajustes' -Fallo $_
+    }
+}
+
 # --- eventos ---------------------------------------------------------
+$ctl.BtnAjustes.Add_Click({ Show-Ajustes })
 $ctl.TxtBuscar.Add_TextChanged({ Update-Lista })
 $ctl.BtnRefrescar.Add_Click({ Update-Deteccion })
 $ctl.ChkRecientes.Add_Click({ Update-Deteccion })
@@ -386,7 +495,7 @@ $ctl.BtnPreparar.Add_Click({
         $j.LaunchOptions = $ctl.TxtOpciones.Text
         $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $j.Exe + '"') -AppName $nombre
         $destino = Join-Path $TempDir "$appId"
-        if (Test-Path $destino) { Remove-Item $destino -Recurse -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $destino) { Remove-Item -LiteralPath $destino -Recurse -Force -ErrorAction SilentlyContinue }
         Add-Log "AppId: $appId"
         $c = New-CaratulasSteam -Juego $j -AppId $appId -GridDir $destino -NombreFinal $nombre -Log $LogGui
         $ctl.ImgPortada.Source = Get-ImagenSegura $c.Rutas['p']

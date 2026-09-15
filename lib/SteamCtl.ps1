@@ -6,9 +6,9 @@ function Get-SteamInfo {
     $k = Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue
     $dir = $null
     if ($k -and $k.SteamPath) { $dir = ($k.SteamPath -replace '/','\') }
-    if (-not $dir -or -not (Test-Path $dir)) {
+    if (-not $dir -or -not (Test-Path -LiteralPath $dir)) {
         foreach ($c in @((Join-Path ${env:ProgramFiles(x86)} 'Steam'), (Join-Path $env:ProgramFiles 'Steam'))) {
-            if (Test-Path $c) { $dir = $c; break }
+            if (Test-Path -LiteralPath $c) { $dir = $c; break }
         }
     }
     if (-not $dir) { return $null }
@@ -16,14 +16,14 @@ function Get-SteamInfo {
     $exe = Join-Path $dir 'steam.exe'
     $userdata = Join-Path $dir 'userdata'
     $perfiles = @()
-    if (Test-Path $userdata) {
-        $perfiles = Get-ChildItem $userdata -Directory -ErrorAction SilentlyContinue |
+    if (Test-Path -LiteralPath $userdata) {
+        $perfiles = Get-ChildItem -LiteralPath $userdata -Directory -ErrorAction SilentlyContinue |
                     Where-Object { $_.Name -match '^\d+$' -and $_.Name -ne '0' }
     }
     # si hay varios perfiles nos quedamos con el de config mas reciente
     $perfil = $perfiles | Sort-Object {
         $c = Join-Path $_.FullName 'config\localconfig.vdf'
-        if (Test-Path $c) { (Get-Item $c).LastWriteTime } else { [datetime]::MinValue }
+        if (Test-Path -LiteralPath $c) { (Get-Item -LiteralPath $c).LastWriteTime } else { [datetime]::MinValue }
     } -Descending | Select-Object -First 1
     if (-not $perfil) { return $null }
 
@@ -64,9 +64,9 @@ function Start-Steam {
 
 function Backup-Shortcuts {
     param([string]$Ruta)
-    if (-not (Test-Path $Ruta)) { return $null }
+    if (-not (Test-Path -LiteralPath $Ruta)) { return $null }
     $bak = "$Ruta.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-    Copy-Item $Ruta $bak -Force
+    Copy-Item -LiteralPath $Ruta -Destination $bak -Force
     return $bak
 }
 
@@ -104,7 +104,7 @@ function New-EntradaShortcut {
 
 function Get-ShortcutsExistentes {
     param([string]$Ruta)
-    if (-not (Test-Path $Ruta)) { return @() }
+    if (-not (Test-Path -LiteralPath $Ruta)) { return @() }
     $root = Read-BinaryVdf -Path $Ruta
     if (-not $root['shortcuts']) { return @() }
     $lista = @()
@@ -119,6 +119,27 @@ function Get-ShortcutsExistentes {
         }
     }
     return $lista
+}
+
+# Clave de la entrada que choca con la nueva (mismo nombre o mismo exe+opciones), o $null
+function Find-ShortcutDuplicado {
+    param($Shortcuts, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
+    if (-not $Shortcuts) { return $null }
+    foreach ($k in @($Shortcuts.Keys)) {
+        $e = $Shortcuts[$k]
+        $mismoNombre = ([string]$e['AppName']) -eq $Nombre
+        $mismoExe    = (([string]$e['Exe']).Trim('"') -eq $Exe) -and (([string]$e['LaunchOptions']) -eq $LaunchOptions)
+        if ($mismoNombre -or $mismoExe) { return $k }
+    }
+    return $null
+}
+
+# Lo mismo leyendo shortcuts.vdf. Es seguro con Steam abierto: solo lee.
+function Test-ShortcutDuplicado {
+    param([Parameter(Mandatory)][string]$RutaVdf, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
+    if (-not (Test-Path -LiteralPath $RutaVdf)) { return $null }
+    $root = Read-BinaryVdf -Path $RutaVdf
+    return (Find-ShortcutDuplicado -Shortcuts $root['shortcuts'] -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions)
 }
 
 # ---------------------------------------------------------------------
@@ -138,19 +159,12 @@ function Add-SteamShortcut {
 
     $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $Exe + '"') -AppName $Nombre
 
-    if (Test-Path $RutaVdf) { $root = Read-BinaryVdf -Path $RutaVdf }
+    if (Test-Path -LiteralPath $RutaVdf) { $root = Read-BinaryVdf -Path $RutaVdf }
     else { $root = [ordered]@{}; $root['shortcuts'] = [ordered]@{} }
     if (-not $root['shortcuts']) { $root['shortcuts'] = [ordered]@{} }
     $sc = $root['shortcuts']
 
-    # ya existe? (mismo nombre o mismo exe+opciones)
-    $existente = $null
-    foreach ($k in @($sc.Keys)) {
-        $e = $sc[$k]
-        $mismoNombre = ([string]$e['AppName']) -eq $Nombre
-        $mismoExe    = (([string]$e['Exe']).Trim('"') -eq $Exe) -and (([string]$e['LaunchOptions']) -eq $LaunchOptions)
-        if ($mismoNombre -or $mismoExe) { $existente = $k; break }
-    }
+    $existente = Find-ShortcutDuplicado -Shortcuts $sc -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions
     if ($existente -ne $null -and -not $Reemplazar) {
         return [pscustomobject]@{ Ok = $false; Motivo = 'duplicado'; Indice = $existente; AppId = $appId }
     }
@@ -173,7 +187,7 @@ function Add-SteamShortcut {
 
 function Remove-SteamShortcut {
     param([Parameter(Mandatory)][string]$RutaVdf, [Parameter(Mandatory)][string]$Nombre)
-    if (-not (Test-Path $RutaVdf)) { return $false }
+    if (-not (Test-Path -LiteralPath $RutaVdf)) { return $false }
     $root = Read-BinaryVdf -Path $RutaVdf
     $sc = $root['shortcuts']
     if (-not $sc) { return $false }
