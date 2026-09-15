@@ -1,0 +1,12 @@
+# Registro de la aplicacion
+*.log
+
+# Clave personal de SteamGridDB
+sgdb.key
+
+# Copias de seguridad de shortcuts.vdf
+*.bak-*
+
+# Notas locales para Claude Code
+CLAUDE.md
+.claude/
