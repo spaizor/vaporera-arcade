@@ -12,19 +12,14 @@ param([switch]$Consola, [string]$Juego)
 
 $ErrorActionPreference = 'Stop'
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $Raiz 'lib\Config.ps1')
-. (Join-Path $Raiz 'lib\Vdf.ps1')
-. (Join-Path $Raiz 'lib\Fuentes.ps1')
-. (Join-Path $Raiz 'lib\Caratulas.ps1')
-. (Join-Path $Raiz 'lib\SteamCtl.ps1')
-
 $TempDir = Join-Path $env:TEMP 'VaporeraArcade'
 $LogFile = Join-Path $Raiz 'vaporera-arcade.log'
 
+# El registro y el aviso de errores van antes de cargar lib\: tienen que funcionar aunque falle eso
 function Write-Registro {
     param([string]$Texto)
     $linea = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Texto
-    try { Add-Content -Path $LogFile -Value $linea -Encoding UTF8 } catch { }
+    try { Add-Content -LiteralPath $LogFile -Value $linea -Encoding UTF8 } catch { }
 }
 
 # Guarda un error con su detalle tecnico (fichero y linea) para poder diagnosticarlo
@@ -35,6 +30,41 @@ function Write-RegistroError {
     if ($pos) { foreach ($l in ($pos -split "`r?`n")) { if ($l.Trim()) { Write-Registro "    $($l.Trim())" } } }
     if ($Fallo.Exception.InnerException) { Write-Registro "    causa: $($Fallo.Exception.InnerException.Message)" }
 }
+
+function Show-AvisoError {
+    param([string]$Texto)
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void][System.Windows.Forms.MessageBox]::Show($Texto, 'Vaporera Arcade - Error', 'OK', 'Error')
+    } catch {
+        # si ni siquiera carga Windows Forms, el cuadro basico de Windows
+        try { [void](New-Object -ComObject WScript.Shell).Popup($Texto, 0, 'Vaporera Arcade - Error', 16) } catch { }
+    }
+}
+
+# Cualquier error sin controlar (una lib que no carga, el XAML, Add-Type...) acaba aqui.
+# Lanzado desde el .vbs no hay consola: sin esto la ventana no aparece y no se ve nada.
+trap {
+    $fallo = $_
+    Write-RegistroError -Contexto 'error sin controlar' -Fallo $fallo
+    # la causa raiz es mas corta (con el XAML roto, el mensaje de fuera incluye el XAML entero)
+    $lineas = @($fallo.Exception.GetBaseException().Message -split "`r?`n")
+    $resumen = ($lineas | Select-Object -First 8) -join "`r`n"
+    if ($lineas.Count -gt 8) { $resumen += "`r`n(...)" }
+    $texto = "Vaporera Arcade se ha cerrado por un error inesperado:`r`n`r`n$resumen"
+    if ($fallo.InvocationInfo -and $fallo.InvocationInfo.ScriptName) {
+        $texto += "`r`n`r`n($(Split-Path $fallo.InvocationInfo.ScriptName -Leaf), línea $($fallo.InvocationInfo.ScriptLineNumber))"
+    }
+    $texto += "`r`n`r`nDetalle en el registro:`r`n$LogFile"
+    if ($Consola) { Write-Host $texto -ForegroundColor Red } else { Show-AvisoError $texto }
+    exit 1
+}
+
+. (Join-Path $Raiz 'lib\Config.ps1')
+. (Join-Path $Raiz 'lib\Vdf.ps1')
+. (Join-Path $Raiz 'lib\Fuentes.ps1')
+. (Join-Path $Raiz 'lib\Caratulas.ps1')
+. (Join-Path $Raiz 'lib\SteamCtl.ps1')
 
 # Busqueda de texto sin comodines: con -like un '[' en el filtro da error
 function Test-Contiene {
