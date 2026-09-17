@@ -22,6 +22,88 @@ function Initialize-Tls {
 }
 
 # ---------------------------------------------------------------------
+#  Comparacion de titulos
+#
+#  Las busquedas por nombre devuelven cualquier cosa y antes se cogia el
+#  primer resultado a ciegas: buscar 'obs64' traia la caratula de otro
+#  programa, y hasta buscando 'Sea of Thieves' el primer resultado es
+#  'Sea of Thieves: X Edition'. Se compara el titulo con el nombre y se
+#  descarta lo que no cuadre.
+# ---------------------------------------------------------------------
+
+# Parecido minimo para dar por bueno un resultado (0 a 1)
+$MinParecidoTitulo = 0.72
+
+# Deja el titulo en minusculas, sin acentos, sin simbolos y sin la coletilla de la edicion
+function Get-TituloNormalizado {
+    param([string]$Texto)
+    if (-not $Texto) { return '' }
+    $t = $Texto.ToLowerInvariant()
+    # sin acentos: 'pokemon' y 'pokémon' tienen que dar lo mismo
+    $t = -join ([char[]]($t.Normalize([Text.NormalizationForm]::FormD)) | Where-Object {
+            [Globalization.CharUnicodeInfo]::GetUnicodeCategory($_) -ne [Globalization.UnicodeCategory]::NonSpacingMark })
+    $t = $t -replace '&', ' and '
+    $t = $t -replace '[^a-z0-9]+', ' '   # puntuacion, (tm), (r), dos puntos...
+    $t = $t.Trim()
+    # 'Forza Horizon 5' y 'Forza Horizon 5 Deluxe Edition' son el mismo juego.
+    # El catalogo responde en el idioma del mercado, asi que hay que quitar tambien la
+    # coletilla en espanol, que ademas va al reves: 'Forza Horizon 5 Edición Premium'.
+    $ed   = 'standard|deluxe|ultimate|complete|definitive|premium|gold|goty|game of the year|anniversary|remastered|enhanced|legendary|collectors|collector|digital'
+    $edEs = 'estandar|deluxe|premium|definitiva|completa|especial|oro|coleccionista|aniversario|legendaria|digital|ultimate|de lujo|anticipada|juego del ano|del ano'
+    for ($i = 0; $i -lt 3; $i++) {
+        $t = $t -replace "\s+($ed)(\s+(edition|bundle|pack))?$", ''
+        $t = $t -replace "\s+edicion(\s+($edEs))?$", ''
+        $t = $t -replace '\s+(edition|bundle|for windows|windows edition|pc|hd)$', ''
+    }
+    $t = ($t -replace '\s+', ' ').Trim()
+    # si al normalizar no queda nada (un titulo en japones, por ejemplo) mejor el original:
+    # dos cadenas vacias se pareceran entre si y darian por bueno cualquier resultado
+    if (-not $t) { return $Texto.ToLowerInvariant().Trim() }
+    return $t
+}
+
+# Distancia de Levenshtein (dos filas, que los titulos son cortos)
+function Get-DistanciaEdicion {
+    param([string]$A, [string]$B)
+    $n = $A.Length; $m = $B.Length
+    if ($n -eq 0) { return $m }
+    if ($m -eq 0) { return $n }
+    $prev = New-Object 'int[]' ($m + 1)
+    $act  = New-Object 'int[]' ($m + 1)
+    for ($j = 0; $j -le $m; $j++) { $prev[$j] = $j }
+    for ($i = 1; $i -le $n; $i++) {
+        $act[0] = $i
+        for ($j = 1; $j -le $m; $j++) {
+            $coste = 1
+            if ($A[$i - 1] -ceq $B[$j - 1]) { $coste = 0 }
+            $act[$j] = [Math]::Min([Math]::Min($act[$j - 1] + 1, $prev[$j] + 1), $prev[$j - 1] + $coste)
+        }
+        $tmp = $prev; $prev = $act; $act = $tmp
+    }
+    return $prev[$m]
+}
+
+# 0 = no tienen nada que ver, 1 = es el mismo titulo
+function Get-ParecidoTitulo {
+    param([string]$Buscado, [string]$Candidato)
+    $a = Get-TituloNormalizado $Buscado
+    $b = Get-TituloNormalizado $Candidato
+    if (-not $a -or -not $b) { return 0 }
+    if ($a -eq $b) { return 1 }
+    # el numero de la saga manda: 'Forza Horizon 5' y 'Forza Horizon 6' se diferencian en una
+    # letra y la distancia sola los daba por el mismo juego (0,93). Si los dos titulos llevan
+    # numero y no es el mismo, son juegos distintos. Si solo lo lleva uno ('Sea of Thieves' y
+    # 'Sea of Thieves: 2026 Edition') suele ser la edicion: que decida la distancia.
+    $na = @([regex]::Matches($a, '\d+') | ForEach-Object { $_.Value })
+    $nb = @([regex]::Matches($b, '\d+') | ForEach-Object { $_.Value })
+    if ($na.Count -and $nb.Count -and (($na -join ' ') -ne ($nb -join ' '))) { return 0 }
+    $max = [Math]::Max($a.Length, $b.Length)
+    $p = 1 - ((Get-DistanciaEdicion -A $a -B $b) / $max)
+    if ($p -lt 0) { $p = 0 }
+    return [Math]::Round($p, 3)
+}
+
+# ---------------------------------------------------------------------
 #  Microsoft Store
 # ---------------------------------------------------------------------
 function Get-StoreImagenes {
@@ -53,18 +135,47 @@ function Get-StoreImagenes {
     return [pscustomobject]@{ Titulo = $titulo; Imagenes = $imgs }
 }
 
-function Find-StoreId {
+# Resultados de la busqueda con su parecido, de mas a menos.
+# Devuelve la lista entera a proposito: la vista previa tiene que poder
+# ofrecer los demas candidatos cuando el elegido no sea el que toca.
+function Get-StoreCandidatos {
     param([Parameter(Mandatory)][string]$Nombre)
     Initialize-Tls
     $q = [uri]::EscapeDataString($Nombre)
     $url = "https://storeedgefd.dsx.mp.microsoft.com/v9.0/search?query=$q&market=ES&locale=es-ES&deviceFamily=Windows.Desktop"
+    $lista = @()
     try {
         $r = Invoke-RestMethod -Uri $url -TimeoutSec 20
-        foreach ($grupo in $r.Payload.SearchResults) {
-            if ($grupo.ProductId) { return $grupo.ProductId }
+        foreach ($res in $r.Payload.SearchResults) {
+            if (-not $res.ProductId) { continue }
+            $lista += [pscustomobject]@{
+                Id       = $res.ProductId
+                Titulo   = [string]$res.Title
+                EsJuego  = ($res.ProductFamilyName -eq 'Games')
+                Parecido = (Get-ParecidoTitulo -Buscado $Nombre -Candidato ([string]$res.Title))
+            }
         }
     } catch { }
-    return $null
+    # a igual parecido, antes un juego que una aplicacion
+    return @($lista | Sort-Object @{ Expression = 'Parecido'; Descending = $true }, @{ Expression = 'EsJuego'; Descending = $true })
+}
+
+function Find-StoreId {
+    param(
+        [Parameter(Mandatory)][string]$Nombre,
+        [double]$MinParecido = $MinParecidoTitulo,
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
+    $cand = Get-StoreCandidatos -Nombre $Nombre
+    if (-not $cand.Count) { return $null }
+    $mejor = $cand[0]
+    if ($mejor.Parecido -lt $MinParecido) {
+        Registrar "  lo más parecido en la Store es '$($mejor.Titulo)': no se parece bastante a '$Nombre', lo descarto"
+        return $null
+    }
+    if ($mejor.Parecido -lt 1) { Registrar "  la Store lo llama '$($mejor.Titulo)'" }
+    return $mejor.Id
 }
 
 # ---------------------------------------------------------------------
@@ -106,17 +217,43 @@ function Test-SgdbClave {
     }
 }
 
+# Resultados de SteamGridDB con su parecido, de mas a menos (misma idea que en la Store)
+function Get-SgdbCandidatos {
+    param([Parameter(Mandatory)][string]$Nombre, [hashtable]$Cabeceras)
+    $lista = @()
+    $b = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/search/autocomplete/$([uri]::EscapeDataString($Nombre))" -Headers $Cabeceras -TimeoutSec 20
+    foreach ($res in $b.data) {
+        if (-not $res.id) { continue }
+        $lista += [pscustomobject]@{
+            Id       = $res.id
+            Titulo   = [string]$res.name
+            Parecido = (Get-ParecidoTitulo -Buscado $Nombre -Candidato ([string]$res.name))
+        }
+    }
+    return @($lista | Sort-Object Parecido -Descending)
+}
+
 function Get-SgdbImagenes {
-    param([Parameter(Mandatory)][string]$Nombre, [scriptblock]$Log = $null)
-    function Registrar($m) { if ($Log) { & $Log $m } }
+    param(
+        [Parameter(Mandatory)][string]$Nombre,
+        [double]$MinParecido = $MinParecidoTitulo,
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
     $clave = Get-SgdbClave
     if (-not $clave) { Registrar '  sin clave de SteamGridDB (se pone en Ajustes), me lo salto'; return $null }
     Initialize-Tls
     $h = @{ Authorization = "Bearer $clave" }
     try {
-        $b = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/search/autocomplete/$([uri]::EscapeDataString($Nombre))" -Headers $h -TimeoutSec 20
-        if (-not $b.data -or $b.data.Count -eq 0) { Registrar "  SteamGridDB no conoce '$Nombre'"; return $null }
-        $id = $b.data[0].id
+        $cand = Get-SgdbCandidatos -Nombre $Nombre -Cabeceras $h
+        if (-not $cand.Count) { Registrar "  SteamGridDB no conoce '$Nombre'"; return $null }
+        $mejor = $cand[0]
+        if ($mejor.Parecido -lt $MinParecido) {
+            Registrar "  lo más parecido en SteamGridDB es '$($mejor.Titulo)': no se parece bastante a '$Nombre', lo descarto"
+            return $null
+        }
+        if ($mejor.Parecido -lt 1) { Registrar "  SteamGridDB lo llama '$($mejor.Titulo)'" }
+        $id = $mejor.Id
         $res = @{}
         $g = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/grids/game/${id}?dimensions=600x900" -Headers $h -TimeoutSec 20
         if ($g.data.Count) { $res['Poster'] = $g.data[0].url }
@@ -215,9 +352,14 @@ function New-CaratulaCompuesta {
         $fuente = New-Object System.Drawing.Font('Segoe UI', $tam, [System.Drawing.FontStyle]::Bold)
         $fmt = New-Object System.Drawing.StringFormat
         $fmt.Alignment = 'Center'; $fmt.LineAlignment = 'Center'
-        $rect = New-Object System.Drawing.RectangleF(($Ancho*0.08), 0, ($Ancho*0.84), $Alto)
+        # las medidas, en variables: 'New-Object RectangleF(($Ancho*0.08)+3, 3, ...)' hace que
+        # PS 5.1 lea el resto de argumentos como un array y lo sume al primero (op_Addition)
+        $rx = [single]($Ancho * 0.08)
+        $rw = [single]($Ancho * 0.84)
+        $rh = [single]$Alto
+        $rect = New-Object System.Drawing.RectangleF($rx, [single]0, $rw, $rh)
         $sombra = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200,0,0,0))
-        $rect2 = New-Object System.Drawing.RectangleF(($Ancho*0.08)+3, 3, ($Ancho*0.84), $Alto)
+        $rect2 = New-Object System.Drawing.RectangleF(($rx + 3), [single]3, $rw, $rh)
         $g.DrawString($Texto, $fuente, $sombra, $rect2, $fmt)
         $blanco = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
         $g.DrawString($Texto, $fuente, $blanco, $rect, $fmt)
@@ -264,21 +406,28 @@ function New-CaratulasSteam {
         [Parameter(Mandatory)][uint32]$AppId,
         [Parameter(Mandatory)][string]$GridDir,
         [string]$NombreFinal = '',
+        [ValidateSet('Automatico','Store','SteamGridDB','Local')][string]$OrigenArte = 'Automatico',
         [scriptblock]$Log = $null
     )
-    function Registrar($m) { if ($Log) { & $Log $m } }
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
     if (-not $NombreFinal) { $NombreFinal = $Juego.Nombre }
     if (-not (Test-Path -LiteralPath $GridDir)) { [void](New-Item -ItemType Directory -Path $GridDir -Force) }
+    # ojo: $OrigenArte (lo que pide el usuario) y $origen (de donde han salido) son variables
+    # distintas, pero PowerShell no distingue mayusculas: no renombrar una y dejar la otra
+    if ($OrigenArte -ne 'Automatico') { Registrar "Origen de las carátulas forzado a: $OrigenArte" }
 
     $origen = 'assets locales'
     $poster = $null; $hero = $null; $capsule = $null; $logo = $null
 
     # 1) Microsoft Store
-    $storeId = $Juego.StoreId
-    if (-not $storeId) {
-        Registrar "Buscando '$NombreFinal' en el catálogo de la Store..."
-        $storeId = Find-StoreId -Nombre $NombreFinal
-        if ($storeId) { Registrar "  encontrado StoreId $storeId" }
+    $storeId = $null
+    if ($OrigenArte -eq 'Automatico' -or $OrigenArte -eq 'Store') {
+        $storeId = $Juego.StoreId
+        if (-not $storeId) {
+            Registrar "Buscando '$NombreFinal' en el catálogo de la Store..."
+            $storeId = Find-StoreId -Nombre $NombreFinal -Log $Log
+            if ($storeId) { Registrar "  encontrado StoreId $storeId" }
+        }
     }
     if ($storeId) {
         Registrar "Descargando carátulas oficiales de la Store ($storeId)..."
@@ -297,7 +446,7 @@ function New-CaratulasSteam {
     }
 
     # 2) SteamGridDB
-    if (-not $poster) {
+    if (-not $poster -and ($OrigenArte -eq 'Automatico' -or $OrigenArte -eq 'SteamGridDB')) {
         Registrar "Buscando '$NombreFinal' en SteamGridDB..."
         $sg = Get-SgdbImagenes -Nombre $NombreFinal -Log $Log
         if ($sg) {

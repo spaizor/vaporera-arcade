@@ -42,7 +42,7 @@ function Test-SteamCorriendo { return [bool](Get-Process steam -ErrorAction Sile
 
 function Stop-SteamYEsperar {
     param([string]$SteamExe, [int]$SegundosMax = 40, [scriptblock]$Log = $null)
-    function Registrar($m) { if ($Log) { & $Log $m } }
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
     if (-not (Test-SteamCorriendo)) { Registrar 'Steam no estaba abierto.'; return $true }
     Registrar 'Cerrando Steam (steam.exe -shutdown)...'
     try { Start-Process -FilePath $SteamExe -ArgumentList '-shutdown' -WindowStyle Hidden } catch { }
@@ -56,17 +56,34 @@ function Stop-SteamYEsperar {
 
 function Start-Steam {
     param([string]$SteamExe, [switch]$BigPicture, [scriptblock]$Log = $null)
-    function Registrar($m) { if ($Log) { & $Log $m } }
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
     Registrar ('Abriendo Steam' + $(if ($BigPicture) { ' en Big Picture' } else { '' }) + '...')
     if ($BigPicture) { Start-Process -FilePath $SteamExe -ArgumentList '-bigpicture' }
     else             { Start-Process -FilePath $SteamExe }
 }
 
+# Se crea una copia por cada escritura: sin podar, config\ acaba llena de .bak-*
+function Remove-BackupsViejos {
+    param([string]$Ruta, [int]$Conservar = 10, [scriptblock]$Log = $null)
+    $dir    = Split-Path $Ruta -Parent
+    $nombre = Split-Path $Ruta -Leaf
+    try {
+        # se ordena por nombre, no por fecha: Copy-Item conserva la del fichero original
+        $viejos = @(Get-ChildItem -LiteralPath $dir -Filter "$nombre.bak-*" -File -ErrorAction Stop |
+                    Sort-Object Name -Descending | Select-Object -Skip $Conservar)
+        foreach ($f in $viejos) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
+        if ($viejos.Count -and $Log) {
+            & $Log "Copias de seguridad antiguas borradas: $($viejos.Count) (se conservan las $Conservar últimas)." | Out-Null
+        }
+    } catch { }
+}
+
 function Backup-Shortcuts {
-    param([string]$Ruta)
+    param([string]$Ruta, [int]$Conservar = 10, [scriptblock]$Log = $null)
     if (-not (Test-Path -LiteralPath $Ruta)) { return $null }
     $bak = "$Ruta.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     Copy-Item -LiteralPath $Ruta -Destination $bak -Force
+    Remove-BackupsViejos -Ruta $Ruta -Conservar $Conservar -Log $Log
     return $bak
 }
 
@@ -155,7 +172,7 @@ function Add-SteamShortcut {
         [switch]$Reemplazar,
         [scriptblock]$Log = $null
     )
-    function Registrar($m) { if ($Log) { & $Log $m } }
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
 
     $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $Exe + '"') -AppName $Nombre
 

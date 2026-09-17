@@ -104,6 +104,22 @@ Por orden de preferencia:
 3. **Imágenes del propio juego.** Si no hay nada más, compone las carátulas con el fondo y el
    logo que trae el juego instalado.
 
+Cuando se busca por el nombre, se compara el título de cada resultado con el del juego y se
+descarta el que no cuadre, en vez de quedarse con el primero: buscar el ejecutable `obs64` no
+trae la carátula de otro programa, y buscar `Forza Horizon 5` no devuelve la de `Forza
+Horizon 6`. Lo descartado queda anotado en el registro. El precio es que un juego cuyo nombre
+detectado no se parece al real (los de Ubisoft salen como `ACValhalla`) se queda con las
+imágenes que trae instaladas.
+
+Con el desplegable **Origen de las carátulas** puedes forzar de dónde salen:
+
+| Opción | Qué hace |
+|---|---|
+| Automático | Store, luego SteamGridDB, luego las imágenes del juego (lo normal) |
+| Solo Microsoft Store | No consulta SteamGridDB |
+| Solo SteamGridDB | Se salta el catálogo de la Store |
+| Solo imágenes del propio juego | No consulta nada por internet |
+
 Imágenes que se generan en `Steam\userdata\<usuario>\config\grid\`:
 
 | Fichero | Tamaño | Dónde se ve |
@@ -158,6 +174,11 @@ Vaporera Arcade
     └── SteamCtl.ps1             localizar, cerrar y abrir Steam, y editar shortcuts.vdf
 ```
 
+Los ajustes y el registro de actividad se guardan fuera de la carpeta de la aplicación, en
+`%LOCALAPPDATA%\VaporeraArcade\`: `config.json` (la clave de SteamGridDB) y
+`vaporera-arcade.log`. Así funciona también instalada en una carpeta sin permiso de escritura,
+como `Archivos de programa`. Si algo falla, el detalle del error está en ese `.log`.
+
 - **`shortcuts.vdf` se lee entero y se vuelve a escribir** a partir de su estructura, no
   insertando bytes sueltos. Leer el fichero y guardarlo sin cambios produce un fichero idéntico
   byte a byte.
@@ -172,7 +193,8 @@ GOG ni Ubisoft. Usa servicios no documentados del catálogo de la Microsoft Stor
 cambiar o dejar de funcionar en cualquier momento.
 
 La aplicación modifica `shortcuts.vdf` de Steam. Siempre hace una copia de seguridad antes
-(`shortcuts.vdf.bak-<fecha>`, en la misma carpeta), pero úsala bajo tu responsabilidad.
+(`shortcuts.vdf.bak-<fecha>`, en la misma carpeta; se conservan las 10 últimas), pero úsala
+bajo tu responsabilidad.
 
 ## Licencia
 

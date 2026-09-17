@@ -13,13 +13,23 @@ param([switch]$Consola, [string]$Juego)
 $ErrorActionPreference = 'Stop'
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TempDir = Join-Path $env:TEMP 'VaporeraArcade'
-$LogFile = Join-Path $Raiz 'vaporera-arcade.log'
+
+# El registro va en %LOCALAPPDATA%, igual que config.json: instalada en Program Files la
+# aplicacion no puede escribir en su propia carpeta. La ruta se calcula aqui a mano porque
+# lib\Config.ps1 (Get-ConfigRuta) todavia no esta cargado.
+$DatosDir = $Raiz
+if ($env:LOCALAPPDATA) { $DatosDir = Join-Path $env:LOCALAPPDATA 'VaporeraArcade' }
+$LogFile = Join-Path $DatosDir 'vaporera-arcade.log'
 
 # El registro y el aviso de errores van antes de cargar lib\: tienen que funcionar aunque falle eso
 function Write-Registro {
     param([string]$Texto)
     $linea = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Texto
-    try { Add-Content -LiteralPath $LogFile -Value $linea -Encoding UTF8 } catch { }
+    try {
+        $dir = Split-Path $LogFile -Parent
+        if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
+        Add-Content -LiteralPath $LogFile -Value $linea -Encoding UTF8
+    } catch { }
 }
 
 # Guarda un error con su detalle tecnico (fichero y linea) para poder diagnosticarlo
@@ -84,10 +94,11 @@ function Invoke-AnadirJuego {
         [switch]$AbrirBigPicture,
         [switch]$NoReabrirSteam,
         [hashtable]$CaratulasListas = $null,
+        [ValidateSet('Automatico','Store','SteamGridDB','Local')][string]$OrigenArte = 'Automatico',
         [scriptblock]$Log = $null
     )
     # si hay $Log, el propio bloque ya escribe en el fichero: asi no se duplican lineas
-    function Registrar($m) { if ($Log) { & $Log $m } else { Write-Registro $m } }
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } else { Write-Registro $m } }
 
     $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $Juego.Exe + '"') -AppName $Nombre
     Registrar "=== $Nombre ==="
@@ -114,7 +125,7 @@ function Invoke-AnadirJuego {
     # a partir de aqui Steam esta cerrado: pase lo que pase, se vuelve a abrir en el finally
     $escrito = $false
     try {
-        $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts
+        $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts -Log $Log
         if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
 
         $r = Add-SteamShortcut -RutaVdf $Steam.Shortcuts -Nombre $Nombre -Exe $Juego.Exe `
@@ -143,7 +154,8 @@ function Invoke-AnadirJuego {
             }
             Registrar "Carátulas copiadas a config\grid\ ($copiadas de $($CaratulasListas.Count) imágenes)."
         } else {
-            $c = New-CaratulasSteam -Juego $Juego -AppId $appId -GridDir $Steam.GridDir -NombreFinal $Nombre -Log $Log
+            $c = New-CaratulasSteam -Juego $Juego -AppId $appId -GridDir $Steam.GridDir -NombreFinal $Nombre `
+                    -OrigenArte $OrigenArte -Log $Log
             Registrar "Carátulas: $($c.Origen)"
         }
 
@@ -198,6 +210,71 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
       <Setter Property="Foreground" Value="#FFB9BEC7"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="Margin" Value="0,4,14,4"/>
+    </Style>
+    <!-- El ComboBox necesita plantilla propia: el tema de Windows pinta su cuadro de blanco
+         pase lo que pase en Background, y el texto claro encima no se lee. -->
+    <Style TargetType="ComboBox">
+      <Setter Property="Background" Value="#FF1E2127"/>
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="BorderBrush" Value="#FF3A3F49"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Height" Value="30"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                      BorderThickness="1" SnapsToDevicePixels="True"/>
+              <ToggleButton Focusable="False" ClickMode="Press" Background="Transparent"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="Transparent">
+                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"
+                            Data="M 0 0 L 4 4 L 8 0 Z" Fill="#FFB9BEC7"/>
+                    </Border>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter Margin="8,0,26,0" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                IsHitTestVisible="False" TextElement.Foreground="{TemplateBinding Foreground}"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+              <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" Focusable="False"
+                     AllowsTransparency="True" PopupAnimation="None">
+                <Border Background="#FF1E2127" BorderBrush="#FF3A3F49" BorderThickness="1"
+                        MinWidth="{TemplateBinding ActualWidth}">
+                  <ScrollViewer MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                    <ItemsPresenter/>
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Background" Value="#FF1E2127"/>
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Padding" Value="8,6"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBoxItem">
+            <!-- sin esto, el elemento bajo el raton sale con el azul claro del sistema -->
+            <Border Name="Bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
+                    SnapsToDevicePixels="True">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FF2E3440"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
     <Style TargetType="Button">
       <Setter Property="Background" Value="#FF262A31"/>
@@ -278,6 +355,14 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
                Background="#FF1E2127" Foreground="#FFE6E8EC" BorderBrush="#FF3A3F49"/>
       <TextBlock Name="TxtDetalle" FontSize="11" Foreground="#FF8A909B" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
+      <TextBlock Text="Origen de las carátulas" FontSize="11" Foreground="#FF8A909B"/>
+      <ComboBox Name="CmbOrigenArte" Margin="0,3,0,12" SelectedIndex="0">
+        <ComboBoxItem Tag="Automatico"  Content="Automático: Store, luego SteamGridDB, luego las del juego"/>
+        <ComboBoxItem Tag="Store"       Content="Solo Microsoft Store"/>
+        <ComboBoxItem Tag="SteamGridDB" Content="Solo SteamGridDB"/>
+        <ComboBoxItem Tag="Local"       Content="Solo imágenes del propio juego"/>
+      </ComboBox>
+
       <WrapPanel Margin="0,0,0,12">
         <Button Name="BtnPreparar" Content="1. Preparar carátulas" Background="#FF2E3440"/>
         <Button Name="BtnAnadir" Content="2. Añadir a Steam" IsEnabled="False" Background="#FF7A1418"/>
@@ -328,7 +413,7 @@ $win = [Windows.Markup.XamlReader]::Load($reader)
 
 $ctl = @{}
 foreach ($n in @('TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
-                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','BtnPreparar','BtnAnadir','TxtOrigenArte',
+                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','TxtOrigenArte',
                  'ImgPortada','ImgCapsula','ImgHero','ChkBigPicture','ChkReemplazar','TxtLog')) {
     $ctl[$n] = $win.FindName($n)
 }
@@ -336,6 +421,7 @@ foreach ($n in @('TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','B
 $script:Steam = Get-SteamInfo
 $script:Todos = @()
 $script:Preparado = $null
+$script:CambiandoJuego = $false   # true mientras la seleccion rellena los cuadros de texto
 
 function Add-Log {
     param([string]$Texto)
@@ -489,10 +575,15 @@ $ctl.ChkApps.Add_Click({ Update-Deteccion })
 $ctl.LstJuegos.Add_SelectionChanged({
     $j = $ctl.LstJuegos.SelectedItem
     if (-not $j) { return }
-    $ctl.TxtNombre.Text   = $j.Nombre
-    $ctl.TxtExe.Text      = $j.Exe
-    $ctl.TxtOpciones.Text = $j.LaunchOptions
-    $ctl.TxtDetalle.Text  = $j.Detalle + $(if ($j.YaEnSteam) { "  |  OJO: ya hay un acceso directo con este nombre." } else { '' })
+    # rellenar TxtNombre dispara su TextChanged: sin esta marca avisaria de un cambio de nombre
+    # que no ha hecho el usuario, solo por elegir otro juego de la lista
+    $script:CambiandoJuego = $true
+    try {
+        $ctl.TxtNombre.Text   = $j.Nombre
+        $ctl.TxtExe.Text      = $j.Exe
+        $ctl.TxtOpciones.Text = $j.LaunchOptions
+        $ctl.TxtDetalle.Text  = $j.Detalle + $(if ($j.YaEnSteam) { "  |  OJO: ya hay un acceso directo con este nombre." } else { '' })
+    } finally { $script:CambiandoJuego = $false }
     Clear-Preview
 })
 
@@ -512,7 +603,10 @@ $ctl.BtnExaminar.Add_Click({
     }
 })
 
-$ctl.TxtNombre.Add_TextChanged({ if ($script:Preparado) { Clear-Preview; Add-Log 'El nombre ha cambiado: hay que preparar las carátulas otra vez.' } })
+$ctl.TxtNombre.Add_TextChanged({
+    if ($script:CambiandoJuego) { return }
+    if ($script:Preparado) { Clear-Preview; Add-Log 'El nombre ha cambiado: hay que preparar las carátulas otra vez.' }
+})
 
 $ctl.BtnPreparar.Add_Click({
     $j = $ctl.LstJuegos.SelectedItem
@@ -527,7 +621,10 @@ $ctl.BtnPreparar.Add_Click({
         $destino = Join-Path $TempDir "$appId"
         if (Test-Path -LiteralPath $destino) { Remove-Item -LiteralPath $destino -Recurse -Force -ErrorAction SilentlyContinue }
         Add-Log "AppId: $appId"
-        $c = New-CaratulasSteam -Juego $j -AppId $appId -GridDir $destino -NombreFinal $nombre -Log $LogGui
+        $origenArte = [string]$ctl.CmbOrigenArte.SelectedItem.Tag
+        if (-not $origenArte) { $origenArte = 'Automatico' }
+        $c = New-CaratulasSteam -Juego $j -AppId $appId -GridDir $destino -NombreFinal $nombre `
+                -OrigenArte $origenArte -Log $LogGui
         $ctl.ImgPortada.Source = Get-ImagenSegura $c.Rutas['p']
         $ctl.ImgCapsula.Source = Get-ImagenSegura $c.Rutas['cap']
         $ctl.ImgHero.Source    = Get-ImagenSegura $c.Rutas['hero']
