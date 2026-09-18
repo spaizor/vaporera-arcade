@@ -186,7 +186,10 @@ Vaporera Arcade
 Los ajustes y el registro de actividad se guardan fuera de la carpeta de la aplicación, en
 `%LOCALAPPDATA%\VaporeraArcade\`: `config.json` (la clave de SteamGridDB) y
 `vaporera-arcade.log`. Así funciona también instalada en una carpeta sin permiso de escritura,
-como `Archivos de programa`. Si algo falla, el detalle del error está en ese `.log`.
+como `Archivos de programa`. Si algo falla, el detalle del error está en ese `.log`. La primera
+línea de cada arranque lleva la versión de la aplicación, el modo, la versión de PowerShell y la
+de Windows: es lo que conviene adjuntar al informar de un fallo. La versión también aparece
+junto al nombre en la cabecera de la ventana.
 
 - **`shortcuts.vdf` se lee entero y se vuelve a escribir** a partir de su estructura, no
   insertando bytes sueltos. Leer el fichero y guardarlo sin cambios produce un fichero idéntico
@@ -194,6 +197,13 @@ como `Archivos de programa`. Si algo falla, el detalle del error está en ese `.
 - **El appid** de un acceso directo es `CRC32(exe_entre_comillas + nombre) | 0x80000000`, el
   mismo cálculo que hace Steam. Por eso las carátulas se asocian al juego correcto.
 - Las entradas nuevas tienen la misma estructura que las que crea Steam.
+
+## Historial de versiones
+
+- **0.5** (18-09-2026): primera versión numerada. Detección de Xbox Game Pass, Epic Games, GOG,
+  Ubisoft Connect, apps de la Microsoft Store y programas recientes; carátulas desde el catálogo
+  de la Store, SteamGridDB o las imágenes del propio juego, con vista previa antes de tocar
+  Steam; copia de seguridad de `shortcuts.vdf` en cada escritura y modo consola.
 
 ## Aviso
 

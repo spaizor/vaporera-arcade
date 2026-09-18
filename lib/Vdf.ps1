@@ -87,15 +87,32 @@ function Write-VdfMap {
     }
 }
 
+# Escribe el VDF sin tocar el original hasta el final. Escribir encima con WriteAllBytes deja
+# el fichero truncado si algo falla a medias (disco lleno, antivirus, apagon), y el usuario
+# pierde TODOS sus accesos directos ajenos a Steam. Aqui se escribe al lado y se cambia de
+# sitio al final: File::Replace es indivisible y conserva los permisos del fichero original.
+# Solo con rutas absolutas (las de Get-SteamInfo): .NET no usa el directorio actual de PS.
 function Write-BinaryVdf {
     param([Parameter(Mandatory)]$Root, [Parameter(Mandatory)][string]$Path)
     $ms = New-Object System.IO.MemoryStream
     $bw = New-Object System.IO.BinaryWriter($ms)
-    Write-VdfMap -Writer $bw -Map $Root
-    $bw.Write([byte]8)      # cierre del documento
-    $bw.Flush()
-    [System.IO.File]::WriteAllBytes($Path, $ms.ToArray())
-    $bw.Dispose(); $ms.Dispose()
+    try {
+        Write-VdfMap -Writer $bw -Map $Root
+        $bw.Write([byte]8)      # cierre del documento
+        $bw.Flush()
+        $bytes = $ms.ToArray()
+    } finally { $bw.Dispose(); $ms.Dispose() }
+
+    $tmp = "$Path.tmp"
+    [System.IO.File]::WriteAllBytes($tmp, $bytes)
+    if (Test-Path -LiteralPath $Path) {
+        # si Replace no puede (sistema de ficheros raro, permisos), al menos los bytes buenos
+        # ya estan en disco: el renombrado a pelo deja una ventana minuscula, no un truncado
+        try { [System.IO.File]::Replace($tmp, $Path, $null) }
+        catch { Move-Item -LiteralPath $tmp -Destination $Path -Force }
+    } else {
+        Move-Item -LiteralPath $tmp -Destination $Path
+    }
 }
 
 # ---------------------------------------------------------------------

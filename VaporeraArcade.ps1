@@ -11,6 +11,12 @@
 param([switch]$Consola, [string]$Juego)
 
 $ErrorActionPreference = 'Stop'
+
+# Version de la aplicacion. Sale en el titulo de la ventana, junto al nombre de la cabecera, en
+# la primera linea del registro y en el historial del README.md: los cuatro tienen que ir
+# sincronizados. El XAML es una cadena literal y no interpola: la ventana la pone por codigo.
+$AppVersion = '0.5'
+
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TempDir = Join-Path $env:TEMP 'VaporeraArcade'
 
@@ -61,7 +67,7 @@ trap {
     $lineas = @($fallo.Exception.GetBaseException().Message -split "`r?`n")
     $resumen = ($lineas | Select-Object -First 8) -join "`r`n"
     if ($lineas.Count -gt 8) { $resumen += "`r`n(...)" }
-    $texto = "Vaporera Arcade se ha cerrado por un error inesperado:`r`n`r`n$resumen"
+    $texto = "Vaporera Arcade $AppVersion se ha cerrado por un error inesperado:`r`n`r`n$resumen"
     if ($fallo.InvocationInfo -and $fallo.InvocationInfo.ScriptName) {
         $texto += "`r`n`r`n($(Split-Path $fallo.InvocationInfo.ScriptName -Leaf), línea $($fallo.InvocationInfo.ScriptLineNumber))"
     }
@@ -69,6 +75,11 @@ trap {
     if ($Consola) { Write-Host $texto -ForegroundColor Red } else { Show-AvisoError $texto }
     exit 1
 }
+
+# Primera linea del registro en cada arranque. Es lo que hay que pedir en un informe de fallo:
+# sin la version y el modo, un log ajeno no dice de que codigo viene.
+$modo = if ($Consola) { 'consola' } else { 'ventana' }
+Write-Registro "=== Vaporera Arcade $AppVersion ($modo) | PowerShell $($PSVersionTable.PSVersion) | Windows $([Environment]::OSVersion.Version) ==="
 
 . (Join-Path $Raiz 'lib\Config.ps1')
 . (Join-Path $Raiz 'lib\Vdf.ps1')
@@ -232,7 +243,9 @@ function Invoke-AnadirJuego {
         return [pscustomobject]@{ Ok = $true; AppId = $appId; Motivo = ''; CaratulasOk = $arteOk }
     } catch {
         if ($escrito) { Registrar 'El acceso directo ya está escrito, pero algo ha fallado después (ver el error).' }
-        elseif ($bak) { Registrar "Algo ha fallado antes de terminar. Si shortcuts.vdf quedara mal, restaura $(Split-Path $bak -Leaf)." }
+        else { Registrar 'Algo ha fallado antes de terminar de escribir.' }
+        # el aviso de la copia de seguridad, siempre que exista: antes solo salia en una rama
+        if ($bak) { Registrar "Si shortcuts.vdf quedara mal, restaura la copia: $bak" }
         throw
     } finally {
         # tras escribir se abre siempre (el usuario querra verlo); si no, solo si estaba abierto
@@ -246,16 +259,17 @@ function Invoke-AnadirJuego {
 #  Modo consola
 # =====================================================================
 if ($Consola) {
+    $LogConsola = { param($m) Write-Host $m; Write-Registro $m }
     $steam = Get-SteamInfo
     if (-not $steam) { Write-Host 'No encuentro la instalación de Steam.' -ForegroundColor Red; exit 1 }
-    $todos = Get-TodosLosJuegos -IncluirRecientes -IncluirApps
+    $todos = Get-TodosLosJuegos -IncluirRecientes -IncluirApps -Log $LogConsola
     if ($Juego) { $todos = $todos | Where-Object { Test-Contiene $_.Nombre $Juego } }
     if (-not $todos) { Write-Host 'Ningún juego detectado con ese filtro.'; exit 1 }
     $i = 0
     $todos | ForEach-Object { Write-Host ("[{0,2}] {1,-45} {2}" -f $i, $_.Nombre, $_.Fuente); $i++ }
     $sel = Read-Host 'Número del juego a añadir'
     $j = $todos[[int]$sel]
-    $r = Invoke-AnadirJuego -Juego $j -Nombre $j.Nombre -Steam $steam -Log { param($m) Write-Host $m; Write-Registro $m }
+    $r = Invoke-AnadirJuego -Juego $j -Nombre $j.Nombre -Steam $steam -Log $LogConsola
     exit $(if ($r.Ok) { 0 } else { 1 })
 }
 
@@ -369,7 +383,11 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
     <!-- cabecera -->
     <Grid Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,10">
       <StackPanel>
-        <TextBlock Text="Vaporera Arcade" FontSize="20" FontWeight="SemiBold" Foreground="#FFDC1E23"/>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="Vaporera Arcade" FontSize="20" FontWeight="SemiBold" Foreground="#FFDC1E23"/>
+          <TextBlock Name="TxtVersion" FontSize="11" Foreground="#FF6E747E" Margin="7,0,0,3"
+                     VerticalAlignment="Bottom"/>
+        </StackPanel>
         <TextBlock Name="TxtSteam" Text="" FontSize="11" Foreground="#FF8A909B" Margin="0,2,0,0"/>
       </StackPanel>
       <Button Name="BtnAjustes" Content="Ajustes..." HorizontalAlignment="Right" VerticalAlignment="Center"
@@ -481,7 +499,7 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $win = [Windows.Markup.XamlReader]::Load($reader)
 
 $ctl = @{}
-foreach ($n in @('TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
+foreach ($n in @('TxtVersion','TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
                  'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','TxtOrigenArte',
                  'ImgPortada','ImgCapsula','ImgHero','ChkBigPicture','ChkReemplazar','TxtLog')) {
     $ctl[$n] = $win.FindName($n)
@@ -493,6 +511,7 @@ $script:Detectados = @()   # lo que devolvio la ultima busqueda
 $script:Manuales = @()     # los elegidos con 'Examinar .exe...', que la busqueda no encuentra
 $script:Preparado = $null
 $script:CambiandoJuego = $false   # true mientras la seleccion rellena los cuadros de texto
+$script:Ocupado = $false          # true mientras hay una operacion larga en marcha
 
 function Add-Log {
     param([string]$Texto)
@@ -508,6 +527,36 @@ function Update-Interfaz {
     [void][Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
         [Windows.Threading.DispatcherPriority]::Background, [action]{ $frame.Continue = $false })
     [Windows.Threading.Dispatcher]::PushFrame($frame)
+}
+
+# Lo que se desactiva mientras dura una operacion larga. El cuadro del registro NO esta en la
+# lista: es lo unico que el usuario mira mientras espera, y desactivado se lee gris.
+$ControlesInteractivos = @('BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar',
+                           'LstJuegos','TxtNombre','TxtOpciones','CmbOrigenArte','BtnPreparar','BtnAnadir',
+                           'ChkBigPicture','ChkReemplazar')
+
+# Un solo sitio decide que botones estan vivos. Antes lo hacia cada evento por su cuenta y no
+# se puede combinar con Invoke-Ocupado, que al terminar reactiva todo a la vez.
+function Update-Botones {
+    $ctl.BtnPreparar.IsEnabled = [bool]$script:Steam
+    $ctl.BtnAnadir.IsEnabled   = ([bool]$script:Steam -and $null -ne $script:Preparado)
+}
+
+# Envoltorio de toda operacion larga lanzada desde un evento. Add-Log llama a Update-Interfaz,
+# que es una bomba de mensajes: sin esto WPF atiende clics en Refrescar, Examinar, las casillas
+# o la lista DENTRO de la escritura del VDF, con Steam cerrado y el fichero a medio escribir.
+function Invoke-Ocupado {
+    param([Parameter(Mandatory)][scriptblock]$Accion)
+    if ($script:Ocupado) { return }          # nunca anidado
+    $script:Ocupado = $true
+    foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $false }
+    try { & $Accion }
+    finally {
+        # el orden importa: la marca primero, para no dejarla puesta si algo falla al reactivar
+        $script:Ocupado = $false
+        foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $true }
+        Update-Botones
+    }
 }
 
 function Get-ImagenSegura {
@@ -550,7 +599,8 @@ function Update-Deteccion {
   try {
     $ctl.LstJuegos.ItemsSource = $null
     Add-Log 'Buscando juegos instalados...'
-    $script:Detectados = @(Get-TodosLosJuegos -IncluirRecientes:([bool]$ctl.ChkRecientes.IsChecked) -IncluirApps:([bool]$ctl.ChkApps.IsChecked))
+    $script:Detectados = @(Get-TodosLosJuegos -IncluirRecientes:([bool]$ctl.ChkRecientes.IsChecked) `
+                                              -IncluirApps:([bool]$ctl.ChkApps.IsChecked) -Log $LogGui)
     Update-Todos
     $texto = "Detectados {0} títulos ({1} ya están en Steam)." -f
                 @($script:Detectados).Count, (@($script:Detectados | Where-Object YaEnSteam)).Count
@@ -564,7 +614,7 @@ function Update-Deteccion {
 
 function Clear-Preview {
     $script:Preparado = $null
-    $ctl.BtnAnadir.IsEnabled = $false
+    Update-Botones
     $ctl.ImgPortada.Source = $null; $ctl.ImgCapsula.Source = $null; $ctl.ImgHero.Source = $null
     $ctl.TxtOrigenArte.Text = ''
 }
@@ -646,11 +696,11 @@ function Show-Ajustes {
 }
 
 # --- eventos ---------------------------------------------------------
-$ctl.BtnAjustes.Add_Click({ Show-Ajustes })
+$ctl.BtnAjustes.Add_Click({ Invoke-Ocupado { Show-Ajustes } })
 $ctl.TxtBuscar.Add_TextChanged({ Update-Lista })
-$ctl.BtnRefrescar.Add_Click({ Update-Deteccion })
-$ctl.ChkRecientes.Add_Click({ Update-Deteccion })
-$ctl.ChkApps.Add_Click({ Update-Deteccion })
+$ctl.BtnRefrescar.Add_Click({ Invoke-Ocupado { Update-Deteccion } })
+$ctl.ChkRecientes.Add_Click({ Invoke-Ocupado { Update-Deteccion } })
+$ctl.ChkApps.Add_Click({ Invoke-Ocupado { Update-Deteccion } })
 
 $ctl.LstJuegos.Add_SelectionChanged({
     $j = $ctl.LstJuegos.SelectedItem
@@ -668,6 +718,7 @@ $ctl.LstJuegos.Add_SelectionChanged({
 })
 
 $ctl.BtnExaminar.Add_Click({
+    if ($script:Ocupado) { return }
     Add-Type -AssemblyName System.Windows.Forms
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = 'Ejecutables (*.exe)|*.exe'
@@ -692,13 +743,14 @@ $ctl.TxtNombre.Add_TextChanged({
     if ($script:Preparado) { Clear-Preview; Add-Log 'El nombre ha cambiado: hay que preparar las carátulas otra vez.' }
 })
 
-$ctl.BtnPreparar.Add_Click({
+# El cuerpo de los dos botones largos va en una funcion aparte para poder envolverlo en
+# Invoke-Ocupado. Ya no tocan IsEnabled: de eso se encarga Update-Botones.
+function Invoke-Preparar {
     $j = $ctl.LstJuegos.SelectedItem
     if (-not $j) { Add-Log 'Elige un juego de la lista.'; return }
     $nombre = $ctl.TxtNombre.Text.Trim()
     if (-not $nombre) { Add-Log 'El nombre no puede estar vacío.'; return }
 
-    $ctl.BtnPreparar.IsEnabled = $false
     try {
         $j.LaunchOptions = $ctl.TxtOpciones.Text
         $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $j.Exe + '"') -AppName $nombre
@@ -714,43 +766,51 @@ $ctl.BtnPreparar.Add_Click({
         $ctl.ImgHero.Source    = Get-ImagenSegura $c.Rutas['hero']
         $ctl.TxtOrigenArte.Text = "Carátulas: $($c.Origen)"
         $script:Preparado = @{ Juego = $j; Nombre = $nombre; AppId = $appId; Rutas = $c.Rutas }
-        $ctl.BtnAnadir.IsEnabled = $true
         Add-Log 'Listas. Si te gustan, pulsa "2. Añadir a Steam".'
     } catch {
         Add-Log "ERROR preparando carátulas: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'preparar carátulas' -Fallo $_
-    } finally {
-        $ctl.BtnPreparar.IsEnabled = $true
     }
-})
+}
+$ctl.BtnPreparar.Add_Click({ Invoke-Ocupado { Invoke-Preparar } })
 
-$ctl.BtnAnadir.Add_Click({
+function Invoke-Anadir {
     if (-not $script:Preparado) { return }
     if (-not $script:Steam) { Add-Log 'No encuentro Steam.'; return }
-    $ctl.BtnAnadir.IsEnabled = $false; $ctl.BtnPreparar.IsEnabled = $false
     try {
         $p = $script:Preparado
         $p.Juego.LaunchOptions = $ctl.TxtOpciones.Text
         $r = Invoke-AnadirJuego -Juego $p.Juego -Nombre $p.Nombre -Steam $script:Steam `
                 -Reemplazar:([bool]$ctl.ChkReemplazar.IsChecked) -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) `
                 -CaratulasListas $p.Rutas -Log $LogGui
+        # si no ha ido bien, $script:Preparado sigue puesto y Update-Botones deja el boton vivo
         if ($r.Ok) { Clear-Preview; Update-Deteccion }
-        else { $ctl.BtnAnadir.IsEnabled = $true }
     } catch {
         Add-Log "ERROR: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'añadir a Steam' -Fallo $_
-        $ctl.BtnAnadir.IsEnabled = $true
-    } finally {
-        $ctl.BtnPreparar.IsEnabled = $true
     }
-})
+}
+$ctl.BtnAnadir.Add_Click({ Invoke-Ocupado { Invoke-Anadir } })
 
 # --- arranque --------------------------------------------------------
+$win.Title = "Vaporera Arcade $AppVersion"
+$ctl.TxtVersion.Text = "v$AppVersion"
 if ($script:Steam) {
     $ctl.TxtSteam.Text = "Perfil $($script:Steam.UserId)  ~  $($script:Steam.Shortcuts)"
 } else {
     $ctl.TxtSteam.Text = 'No encuentro la instalación de Steam.'
-    $ctl.BtnPreparar.IsEnabled = $false
 }
-$win.Add_ContentRendered({ Update-Deteccion })
+Update-Botones
+
+# Con una operacion en marcha Steam esta cerrado y el VDF puede estar a medio escribir, asi que
+# la X de la ventana tampoco vale: Update-Interfaz deja que WPF la atienda ahi en medio.
+$win.Add_Closing({
+    if ($script:Ocupado) {
+        $_.Cancel = $true
+        # a mano, sin Add-Log: llamaria a Update-Interfaz estando ya dentro de una
+        $ctl.TxtLog.AppendText("Espera a que termine la operación en curso." + "`r`n")
+        $ctl.TxtLog.ScrollToEnd()
+    }
+})
+$win.Add_ContentRendered({ Invoke-Ocupado { Update-Deteccion } })
 [void]$win.ShowDialog()

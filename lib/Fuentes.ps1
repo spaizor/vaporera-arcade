@@ -89,6 +89,12 @@ function Get-JuegosUbisoft {
         $dir = (Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue).InstallDir
         if (-not $dir) { continue }
         $dir = $dir -replace '/','\'
+        # El registro conserva la clave de juegos desinstalados y de los que estan en un disco
+        # desconectado. Sin esta comprobacion, Get-Item devuelve $null, '-Fecha $null' no se
+        # puede convertir a [datetime] y la excepcion se lleva por delante la deteccion de
+        # TODOS los origenes: el usuario ve la lista vacia.
+        $info = Get-Item -LiteralPath $dir -ErrorAction SilentlyContinue
+        if (-not $info) { continue }
         $nombre = Split-Path $dir.TrimEnd('\') -Leaf
         $icono = ''
         $exeGrande = Get-ChildItem -LiteralPath $dir -Filter *.exe -Recurse -ErrorAction SilentlyContinue |
@@ -97,7 +103,7 @@ function Get-JuegosUbisoft {
         $res += New-Juego -Nombre $nombre -Fuente 'Ubisoft Connect' `
                 -Exe $launcherExe -StartDir $startDir -LaunchOptions "uplay://launch/$id/0" `
                 -Icono $icono -Carpeta $dir -Detalle "URI de Ubisoft (el .exe directo no arranca por DRM)" `
-                -Fecha (Get-Item -LiteralPath $dir -ErrorAction SilentlyContinue).LastWriteTime
+                -Fecha $info.LastWriteTime
     }
     return $res
 }
@@ -226,16 +232,36 @@ function Get-ProgramasRecientes {
 }
 
 # ---------------------------------------------------------------------
-#  Todo junto, marcando lo que ya esta en Steam
+#  Todo junto, cada origen aislado del resto
 # ---------------------------------------------------------------------
+
+# Deja constancia de un origen que ha fallado. Sin -Log intenta el registro de la aplicacion,
+# que solo existe si esta lib se ha cargado desde VaporeraArcade.ps1 (se puede usar suelta).
+function Write-AvisoFuente {
+    param([string]$Texto, [scriptblock]$Log = $null)
+    if ($Log) { & $Log $Texto | Out-Null; return }
+    if (Get-Command Write-Registro -ErrorAction SilentlyContinue) { Write-Registro $Texto }
+}
+
 function Get-TodosLosJuegos {
-    param([switch]$IncluirRecientes, [switch]$IncluirApps)
+    param([switch]$IncluirRecientes, [switch]$IncluirApps, [scriptblock]$Log = $null)
+    # Cada origen va en su propio try: uno que falle (una clave del registro que apunta a un
+    # disco desconectado, un manifiesto ilegible...) no puede dejar la lista entera vacia.
+    $origenes = [ordered]@{
+        'Xbox / Game Pass' = { Get-JuegosXbox }
+        'Ubisoft Connect'  = { Get-JuegosUbisoft }
+        'Epic Games'       = { Get-JuegosEpic }
+        'GOG'              = { Get-JuegosGog }
+    }
+    if ($IncluirApps)      { $origenes['apps de la Store']   = { Get-AppsStore } }
+    if ($IncluirRecientes) { $origenes['programas recientes'] = { Get-ProgramasRecientes } }
+
     $lista = @()
-    $lista += Get-JuegosXbox
-    $lista += Get-JuegosUbisoft
-    $lista += Get-JuegosEpic
-    $lista += Get-JuegosGog
-    if ($IncluirApps)      { $lista += Get-AppsStore }
-    if ($IncluirRecientes) { $lista += Get-ProgramasRecientes }
+    foreach ($nombre in @($origenes.Keys)) {
+        try { $lista += & $origenes[$nombre] }
+        catch {
+            Write-AvisoFuente -Log $Log -Texto "No he podido leer los juegos de $nombre : $($_.Exception.Message)"
+        }
+    }
     return $lista
 }
