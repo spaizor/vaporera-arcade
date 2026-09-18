@@ -119,14 +119,13 @@ function New-EntradaShortcut {
     return $e
 }
 
-function Get-ShortcutsExistentes {
-    param([string]$Ruta)
-    if (-not (Test-Path -LiteralPath $Ruta)) { return @() }
-    $root = Read-BinaryVdf -Path $Ruta
-    if (-not $root['shortcuts']) { return @() }
+# El nodo 'shortcuts' del VDF en objetos comparables
+function ConvertTo-ShortcutInfo {
+    param($Shortcuts)
     $lista = @()
-    foreach ($k in @($root['shortcuts'].Keys)) {
-        $e = $root['shortcuts'][$k]
+    if (-not $Shortcuts) { return $lista }
+    foreach ($k in @($Shortcuts.Keys)) {
+        $e = $Shortcuts[$k]
         $lista += [pscustomobject]@{
             Indice = $k
             Nombre = [string]$e['AppName']
@@ -138,15 +137,24 @@ function Get-ShortcutsExistentes {
     return $lista
 }
 
-# Clave de la entrada que choca con la nueva (mismo nombre o mismo exe+opciones), o $null
+function Get-ShortcutsExistentes {
+    param([string]$Ruta)
+    if (-not (Test-Path -LiteralPath $Ruta)) { return @() }
+    $root = Read-BinaryVdf -Path $Ruta
+    return (ConvertTo-ShortcutInfo -Shortcuts $root['shortcuts'])
+}
+
+# UNICO criterio de duplicado de la aplicacion: mismo nombre, o el mismo exe con las mismas
+# opciones. Lo usan la marca 'YA EN STEAM' de la lista y la escritura del VDF, que antes
+# miraban cosas distintas (la lista solo el nombre) y se contradecian.
+# Devuelve la clave de la entrada que choca, o $null.
 function Find-ShortcutDuplicado {
-    param($Shortcuts, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
-    if (-not $Shortcuts) { return $null }
-    foreach ($k in @($Shortcuts.Keys)) {
-        $e = $Shortcuts[$k]
-        $mismoNombre = ([string]$e['AppName']) -eq $Nombre
-        $mismoExe    = (([string]$e['Exe']).Trim('"') -eq $Exe) -and (([string]$e['LaunchOptions']) -eq $LaunchOptions)
-        if ($mismoNombre -or $mismoExe) { return $k }
+    param($Existentes, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
+    foreach ($e in @($Existentes)) {
+        if (-not $e) { continue }
+        $mismoNombre = ([string]$e.Nombre) -eq $Nombre
+        $mismoExe    = (([string]$e.Exe) -eq $Exe) -and (([string]$e.LaunchOptions) -eq $LaunchOptions)
+        if ($mismoNombre -or $mismoExe) { return $e.Indice }
     }
     return $null
 }
@@ -154,9 +162,8 @@ function Find-ShortcutDuplicado {
 # Lo mismo leyendo shortcuts.vdf. Es seguro con Steam abierto: solo lee.
 function Test-ShortcutDuplicado {
     param([Parameter(Mandatory)][string]$RutaVdf, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
-    if (-not (Test-Path -LiteralPath $RutaVdf)) { return $null }
-    $root = Read-BinaryVdf -Path $RutaVdf
-    return (Find-ShortcutDuplicado -Shortcuts $root['shortcuts'] -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions)
+    return (Find-ShortcutDuplicado -Existentes (Get-ShortcutsExistentes -Ruta $RutaVdf) `
+                -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions)
 }
 
 # ---------------------------------------------------------------------
@@ -181,7 +188,8 @@ function Add-SteamShortcut {
     if (-not $root['shortcuts']) { $root['shortcuts'] = [ordered]@{} }
     $sc = $root['shortcuts']
 
-    $existente = Find-ShortcutDuplicado -Shortcuts $sc -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions
+    $existente = Find-ShortcutDuplicado -Existentes (ConvertTo-ShortcutInfo -Shortcuts $sc) `
+                    -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions
     if ($existente -ne $null -and -not $Reemplazar) {
         return [pscustomobject]@{ Ok = $false; Motivo = 'duplicado'; Indice = $existente; AppId = $appId }
     }

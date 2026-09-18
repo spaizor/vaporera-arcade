@@ -85,6 +85,74 @@ function Test-Contiene {
 # =====================================================================
 #  Nucleo compartido por la GUI y el modo consola
 # =====================================================================
+
+# Las imagenes que Steam no puede dejar de tener: sin ellas el juego sale en blanco
+$ImagenesClave = [ordered]@{ p = 'portada'; cap = 'cápsula'; hero = 'cabecera' }
+
+# Deja las imagenes en config\grid\: copia las que preparo la GUI o las genera al vuelo
+# (modo consola). Devuelve Ok (estan las tres imprescindibles), la ruta del _icon.png (la que
+# va al campo 'icon' del VDF) y las que falten.
+function Invoke-Caratulas {
+    param(
+        [Parameter(Mandatory)]$Juego,
+        [Parameter(Mandatory)][string]$Nombre,
+        [Parameter(Mandatory)][uint32]$AppId,
+        [Parameter(Mandatory)]$Steam,
+        [hashtable]$CaratulasListas = $null,
+        [string]$OrigenArte = 'Automatico',
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } else { Write-Registro $m } }
+
+    # las que hayan quedado de verdad en config\grid\, para saber si se puede decir que esta listo
+    function Get-Informe($Rutas, $Icono) {
+        $faltan = @()
+        foreach ($k in $ImagenesClave.Keys) {
+            if (-not $Rutas[$k] -or -not (Test-Path -LiteralPath $Rutas[$k])) { $faltan += $ImagenesClave[$k] }
+        }
+        return [pscustomobject]@{ Ok = ($faltan.Count -eq 0); Icono = $Icono; Faltan = $faltan }
+    }
+
+    if (-not $CaratulasListas -or -not $CaratulasListas.Count) {
+        $c = New-CaratulasSteam -Juego $Juego -AppId $AppId -GridDir $Steam.GridDir -NombreFinal $Nombre `
+                -OrigenArte $OrigenArte -Log $Log
+        Registrar "Carátulas: $($c.Origen)"
+        return (Get-Informe -Rutas $c.Rutas -Icono $c.Rutas['icon'])
+    }
+
+    # en un PC recien estrenado config\grid\ todavia no existe: hay que crearla
+    if (-not (Test-Path -LiteralPath $Steam.GridDir)) {
+        [void](New-Item -ItemType Directory -Path $Steam.GridDir -Force)
+        Registrar "Creada la carpeta config\grid\ (no existía)."
+    }
+    $copiadas = 0
+    $puestas = @{}
+    $finales = @{}
+    foreach ($k in $CaratulasListas.Keys) {
+        $origenImg = $CaratulasListas[$k]
+        if (-not (Test-Path -LiteralPath $origenImg)) { Registrar "  falta la imagen '$k', me la salto."; continue }
+        $hoja = Split-Path $origenImg -Leaf
+        $destino = Join-Path $Steam.GridDir $hoja
+        try {
+            Copy-Item -LiteralPath $origenImg -Destination $destino -Force
+            $copiadas++; $puestas[$hoja] = $true; $finales[$k] = $destino
+        }
+        catch { Registrar "  no he podido copiar '$k': $($_.Exception.Message)" }
+    }
+    # lo que esta vez no se ha generado (un _logo.png que no valia, por ejemplo) se quita:
+    # si no, Steam seguiria usando el de un intento anterior
+    foreach ($n in @("${AppId}p.png", "${AppId}.png", "${AppId}_hero.png", "${AppId}_logo.png", "${AppId}_icon.png")) {
+        if ($puestas.ContainsKey($n)) { continue }
+        $viejo = Join-Path $Steam.GridDir $n
+        if (Test-Path -LiteralPath $viejo) {
+            Remove-Item -LiteralPath $viejo -Force -ErrorAction SilentlyContinue
+            Registrar "  quitada la imagen antigua $n"
+        }
+    }
+    Registrar "Carátulas copiadas a config\grid\ ($copiadas de $($CaratulasListas.Count) imágenes)."
+    return (Get-Informe -Rutas $finales -Icono $finales['icon'])
+}
+
 function Invoke-AnadirJuego {
     param(
         [Parameter(Mandatory)]$Juego,
@@ -112,14 +180,14 @@ function Invoke-AnadirJuego {
         $dup = Test-ShortcutDuplicado -RutaVdf $Steam.Shortcuts -Nombre $Nombre -Exe $Juego.Exe -LaunchOptions $Juego.LaunchOptions
         if ($null -ne $dup) {
             Registrar "Ya existe un acceso directo igual (entrada $dup). No se ha tocado nada."
-            return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado' }
+            return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado'; CaratulasOk = $false }
         }
     }
 
     $estabaAbierto = Test-SteamCorriendo
     if (-not (Stop-SteamYEsperar -SteamExe $Steam.Exe -Log $Log)) {
         Registrar 'ABORTADO: Steam no se ha cerrado. Ciérralo a mano y repite.'
-        return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'steam-abierto' }
+        return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'steam-abierto'; CaratulasOk = $false }
     }
 
     # a partir de aqui Steam esta cerrado: pase lo que pase, se vuelve a abrir en el finally
@@ -128,39 +196,40 @@ function Invoke-AnadirJuego {
         $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts -Log $Log
         if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
 
+        # Las caratulas van ANTES de escribir el VDF: Steam no busca el icono por el nombre del
+        # fichero, lo saca del campo 'icon' de la entrada, y hasta que no estan generadas no se
+        # sabe si hay _icon.png. Si fallan se anade el juego igual: sin caratula se ve, sin
+        # acceso directo no.
+        $icono = $Juego.Icono
+        $arte = $null
+        try {
+            $arte = Invoke-Caratulas -Juego $Juego -Nombre $Nombre -AppId $appId -Steam $Steam `
+                        -CaratulasListas $CaratulasListas -OrigenArte $OrigenArte -Log $Log
+            if ($arte.Icono -and (Test-Path -LiteralPath $arte.Icono)) { $icono = $arte.Icono }
+        } catch {
+            Registrar "Las carátulas han fallado: $($_.Exception.Message). Sigo con el acceso directo."
+            Write-RegistroError -Contexto 'generar carátulas' -Fallo $_
+        }
+        $arteOk = [bool]($arte -and $arte.Ok)
+
         $r = Add-SteamShortcut -RutaVdf $Steam.Shortcuts -Nombre $Nombre -Exe $Juego.Exe `
-                -StartDir $Juego.StartDir -Icono $Juego.Icono -LaunchOptions $Juego.LaunchOptions `
+                -StartDir $Juego.StartDir -Icono $icono -LaunchOptions $Juego.LaunchOptions `
                 -Reemplazar:$Reemplazar -Log $Log
         if (-not $r.Ok) {
             Registrar "Ya existe un acceso directo igual (entrada $($r.Indice)). No se ha tocado nada."
-            return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado' }
+            return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado'; CaratulasOk = $false }
         }
         $escrito = $true
 
-        # caratulas: o las ya preparadas, o generarlas ahora
-        if ($CaratulasListas -and $CaratulasListas.Count) {
-            # en un PC recien estrenado config\grid\ todavia no existe: hay que crearla
-            if (-not (Test-Path -LiteralPath $Steam.GridDir)) {
-                [void](New-Item -ItemType Directory -Path $Steam.GridDir -Force)
-                Registrar "Creada la carpeta config\grid\ (no existía)."
-            }
-            $copiadas = 0
-            foreach ($k in $CaratulasListas.Keys) {
-                $origenImg = $CaratulasListas[$k]
-                if (-not (Test-Path -LiteralPath $origenImg)) { Registrar "  falta la imagen '$k', me la salto."; continue }
-                $destino = Join-Path $Steam.GridDir (Split-Path $origenImg -Leaf)
-                try { Copy-Item -LiteralPath $origenImg -Destination $destino -Force; $copiadas++ }
-                catch { Registrar "  no he podido copiar '$k': $($_.Exception.Message)" }
-            }
-            Registrar "Carátulas copiadas a config\grid\ ($copiadas de $($CaratulasListas.Count) imágenes)."
+        if ($arteOk) {
+            Registrar "LISTO. '$Nombre' ya está en la biblioteca."
         } else {
-            $c = New-CaratulasSteam -Juego $Juego -AppId $appId -GridDir $Steam.GridDir -NombreFinal $Nombre `
-                    -OrigenArte $OrigenArte -Log $Log
-            Registrar "Carátulas: $($c.Origen)"
+            # el acceso directo esta, que es lo que importa, pero sin decir que todo ha ido bien
+            $queFalta = if ($arte -and $arte.Faltan.Count) { "falta " + ($arte.Faltan -join ', ') } else { 'no hay carátulas' }
+            Registrar "'$Nombre' ya está en la biblioteca, pero las carátulas no están completas ($queFalta)."
+            Registrar 'Steam lo mostrará sin imagen. Puedes volver a intentarlo con "Reemplazar si ya existe".'
         }
-
-        Registrar "LISTO. '$Nombre' ya está en la biblioteca."
-        return [pscustomobject]@{ Ok = $true; AppId = $appId; Motivo = '' }
+        return [pscustomobject]@{ Ok = $true; AppId = $appId; Motivo = ''; CaratulasOk = $arteOk }
     } catch {
         if ($escrito) { Registrar 'El acceso directo ya está escrito, pero algo ha fallado después (ver el error).' }
         elseif ($bak) { Registrar "Algo ha fallado antes de terminar. Si shortcuts.vdf quedara mal, restaura $(Split-Path $bak -Leaf)." }
@@ -419,7 +488,9 @@ foreach ($n in @('TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','B
 }
 
 $script:Steam = Get-SteamInfo
-$script:Todos = @()
+$script:Todos = @()        # lo que se ve en la lista: los de 'Examinar' y detras lo detectado
+$script:Detectados = @()   # lo que devolvio la ultima busqueda
+$script:Manuales = @()     # los elegidos con 'Examinar .exe...', que la busqueda no encuentra
 $script:Preparado = $null
 $script:CambiandoJuego = $false   # true mientras la seleccion rellena los cuadros de texto
 
@@ -458,24 +529,33 @@ function Update-Lista {
     $ctl.LstJuegos.ItemsSource = @($vista)
 }
 
+# Rehace la lista y la marca 'YA EN STEAM' con el mismo criterio que usa la escritura del
+# VDF (Find-ShortcutDuplicado): nombre igual, o exe con las mismas opciones.
+function Update-Todos {
+    $existentes = @()
+    if ($script:Steam) { $existentes = @(Get-ShortcutsExistentes -Ruta $script:Steam.Shortcuts) }
+    foreach ($j in (@($script:Manuales) + @($script:Detectados))) {
+        $dup = Find-ShortcutDuplicado -Existentes $existentes -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions $j.LaunchOptions
+        $j.YaEnSteam = ($null -ne $dup)
+        $marca = if ($j.YaEnSteam) { 'YA EN STEAM' } else { '' }
+        $j | Add-Member -NotePropertyName Marca -NotePropertyValue $marca -Force
+    }
+    # los de 'Examinar' van delante: el usuario los acaba de elegir y no salen de la busqueda
+    $script:Todos = @($script:Manuales) +
+                    @($script:Detectados | Sort-Object @{Expression={$_.YaEnSteam}}, @{Expression={$_.Fuente}}, @{Expression={$_.Nombre}})
+    Update-Lista
+}
+
 function Update-Deteccion {
   try {
     $ctl.LstJuegos.ItemsSource = $null
     Add-Log 'Buscando juegos instalados...'
-    $lista = @(Get-TodosLosJuegos -IncluirRecientes:([bool]$ctl.ChkRecientes.IsChecked) -IncluirApps:([bool]$ctl.ChkApps.IsChecked))
-
-    $yaPuestos = @{}
-    if ($script:Steam) {
-        foreach ($e in Get-ShortcutsExistentes -Ruta $script:Steam.Shortcuts) { $yaPuestos[$e.Nombre.ToLower()] = $true }
-    }
-    foreach ($j in $lista) {
-        $j.YaEnSteam = $yaPuestos.ContainsKey($j.Nombre.ToLower())
-        $marca = if ($j.YaEnSteam) { 'YA EN STEAM' } else { '' }
-        $j | Add-Member -NotePropertyName Marca -NotePropertyValue $marca -Force
-    }
-    $script:Todos = @($lista | Sort-Object @{Expression={$_.YaEnSteam}}, @{Expression={$_.Fuente}}, @{Expression={$_.Nombre}})
-    Add-Log ("Detectados {0} títulos ({1} ya están en Steam)." -f $script:Todos.Count, (@($script:Todos | Where-Object YaEnSteam)).Count)
-    Update-Lista
+    $script:Detectados = @(Get-TodosLosJuegos -IncluirRecientes:([bool]$ctl.ChkRecientes.IsChecked) -IncluirApps:([bool]$ctl.ChkApps.IsChecked))
+    Update-Todos
+    $texto = "Detectados {0} títulos ({1} ya están en Steam)." -f
+                @($script:Detectados).Count, (@($script:Detectados | Where-Object YaEnSteam)).Count
+    if (@($script:Manuales).Count) { $texto += " Y {0} elegidos a mano." -f @($script:Manuales).Count }
+    Add-Log $texto
   } catch {
     Add-Log "ERROR detectando juegos: $($_.Exception.Message)"
     Write-RegistroError -Contexto 'detectar juegos' -Fallo $_
@@ -597,9 +677,13 @@ $ctl.BtnExaminar.Add_Click({
              -Exe $exe -StartDir ((Split-Path $exe -Parent) + '\') -Icono $exe `
              -Carpeta (Split-Path $exe -Parent) -Detalle 'Elegido a mano'
         $j | Add-Member -NotePropertyName Marca -NotePropertyValue '' -Force
-        $script:Todos = @($j) + $script:Todos
-        Update-Lista
+        # aparte de lo detectado: si no, Refrescar (o anadir un juego) se los llevaba por delante
+        $script:Manuales = @($j) + @($script:Manuales | Where-Object { $_.Exe -ne $exe })
+        # con un filtro puesto el juego recien elegido podria no salir en la lista
+        if ($ctl.TxtBuscar.Text) { $ctl.TxtBuscar.Text = '' }
+        Update-Todos
         $ctl.LstJuegos.SelectedIndex = 0
+        Add-Log "Añadido a la lista a mano: $($j.Nombre)"
     }
 })
 

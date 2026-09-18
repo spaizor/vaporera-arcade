@@ -27,10 +27,11 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   Las apps de la Store y los programas recientes están desactivados por defecto, porque llenan
   la lista de cosas que no son juegos. Se activan con sus casillas.
 
-- **Carátulas automáticas.** Genera las cinco imágenes que usa Steam: portada, cápsula, hero,
+- **Carátulas automáticas.** Genera las imágenes que usa Steam: portada, cápsula, hero,
   logo e icono.
 - **Vista previa.** Puedes ver las carátulas antes de modificar nada en Steam.
-- **Marca los juegos que ya están en Steam** y los muestra al final de la lista.
+- **Marca los juegos que ya están en Steam** y los muestra al final de la lista. Se consideran
+  repetidos los que tengan el mismo nombre, o el mismo ejecutable con las mismas opciones.
 - **Copia de seguridad** de `shortcuts.vdf` antes de cada escritura.
 - **Reabre Steam** al terminar, en Big Picture si lo prefieres.
 - **Modo consola** para usarlo sin ventana.
@@ -128,7 +129,15 @@ Imágenes que se generan en `Steam\userdata\<usuario>\config\grid\`:
 | `<appid>.png` | 460×215 | Cápsula horizontal |
 | `<appid>_hero.png` | 1920×620 | Cabecera de la página del juego |
 | `<appid>_logo.png` | Variable | Logo sobre la cabecera |
-| `<appid>_icon.png` | 256×256 | Icono |
+| `<appid>_icon.png` | 256×256 | Icono de la lista |
+
+El logo solo se genera cuando la imagen encontrada es un logo de verdad: transparente o
+apaisado. El catálogo de la Store devuelve muchas veces la baldosa cuadrada del menú Inicio,
+que con su fondo encima de la cabecera queda mal; esa imagen se aprovecha para el icono.
+
+El icono no lo busca Steam por el nombre del fichero: lo saca del campo `icon` del acceso
+directo, y la aplicación lo apunta al `_icon.png` generado. Si el juego no tiene arte en
+internet ni imágenes propias, ese campo se queda apuntando al `.exe` y Steam usa su icono.
 
 ## Limitaciones conocidas
 

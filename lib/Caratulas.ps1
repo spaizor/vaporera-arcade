@@ -12,7 +12,8 @@
 #    <appid>.png       460x215
 #    <appid>_hero.png  1920x620
 #    <appid>_logo.png  logo con transparencia
-#    <appid>_icon.png  icono de la lista
+#    <appid>_icon.png  icono de la lista. Steam NO lo busca por el nombre: solo lo usa si
+#                      el campo 'icon' de la entrada del VDF apunta a el (Invoke-AnadirJuego)
 # =====================================================================
 
 Add-Type -AssemblyName System.Drawing
@@ -318,6 +319,40 @@ function New-ImagenCover {
     return $dst
 }
 
+# Encaja la imagen entera en un cuadrado sin deformarla, con el hueco transparente.
+# 'New-Object Bitmap($origen, 256, 256)' estiraba los logos apaisados.
+function New-IconoCuadrado {
+    param([System.Drawing.Bitmap]$Origen, [int]$Lado = 256)
+    $dst = New-Object System.Drawing.Bitmap -ArgumentList $Lado, $Lado, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($dst)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g.PixelOffsetMode   = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.Clear([System.Drawing.Color]::Transparent)
+
+    $esc = [Math]::Min($Lado / $Origen.Width, $Lado / $Origen.Height)
+    $w = [int][Math]::Round($Origen.Width * $esc)
+    $h = [int][Math]::Round($Origen.Height * $esc)
+    $g.DrawImage($Origen, [int](($Lado - $w) / 2), [int](($Lado - $h) / 2), $w, $h)
+    $g.Dispose()
+    return $dst
+}
+
+# Un logo de verdad es apaisado o tiene el fondo transparente. El 'Logo' del catalogo de la
+# Store es una baldosa cuadrada y opaca (el mosaico del menu Inicio): como _logo.png encima
+# del hero se ve el recuadro con su fondo y queda fatal.
+function Test-EsLogo {
+    param([System.Drawing.Bitmap]$Bitmap)
+    if (-not $Bitmap) { return $false }
+    if (($Bitmap.Width / $Bitmap.Height) -ge 1.3) { return $true }
+    if (-not [System.Drawing.Image]::IsAlphaPixelFormat($Bitmap.PixelFormat)) { return $false }
+    $x = $Bitmap.Width - 1; $y = $Bitmap.Height - 1
+    foreach ($esquina in @(@(0, 0), @($x, 0), @(0, $y), @($x, $y))) {
+        if ($Bitmap.GetPixel($esquina[0], $esquina[1]).A -gt 32) { return $false }
+    }
+    return $true
+}
+
 # Compone una caratula a partir de un fondo + logo (plan B sin internet)
 function New-CaratulaCompuesta {
     param(
@@ -381,7 +416,9 @@ function Save-Png {
 # ---------------------------------------------------------------------
 function Get-AssetsLocales {
     param([string]$Carpeta, [string]$Icono)
-    $r = @{ Fondo = $null; Logo = $null }
+    # LogoDelExe: el icono que saca ExtractAssociatedIcon es de 32x32. Vale para componer una
+    # caratula, pero no para generar un _icon.png de 256 (sale borroso) ni un _logo.png.
+    $r = @{ Fondo = $null; Logo = $null; LogoDelExe = $false }
     if ($Carpeta -and (Test-Path -LiteralPath $Carpeta)) {
         $pngs = Get-ChildItem -LiteralPath $Carpeta -Filter *.png -ErrorAction SilentlyContinue
         $splash = $pngs | Where-Object { $_.Name -match 'splash|hero|background|key_?art' } |
@@ -393,7 +430,10 @@ function Get-AssetsLocales {
                 Sort-Object Length -Descending | Select-Object -First 1
         if ($logo) { $r.Logo = Get-BitmapDesdeArchivo -Ruta $logo.FullName }
     }
-    if (-not $r.Logo -and $Icono -and (Test-Path -LiteralPath $Icono)) { $r.Logo = Get-BitmapDesdeArchivo -Ruta $Icono }
+    if (-not $r.Logo -and $Icono -and (Test-Path -LiteralPath $Icono)) {
+        $r.Logo = Get-BitmapDesdeArchivo -Ruta $Icono
+        if ($r.Logo) { $r.LogoDelExe = [bool]($Icono -match '\.exe$') }
+    }
     return $r
 }
 
@@ -436,9 +476,11 @@ function New-CaratulasSteam {
             $im = $cat.Imagenes
             if ($im['Poster'])        { $poster  = Get-BitmapDesdeUrl $im['Poster'].Uri }
             if (-not $poster -and $im['BrandedKeyArt']) { $poster = Get-BitmapDesdeUrl $im['BrandedKeyArt'].Uri }
-            if ($im['SuperHeroArt'])  { $hero    = Get-BitmapDesdeUrl $im['SuperHeroArt'].Uri }
-            if (-not $hero -and $im['TitledHeroArt']) { $hero = Get-BitmapDesdeUrl $im['TitledHeroArt'].Uri }
+            # TitledHeroArt es la capsula y, si no hay SuperHeroArt, tambien el hero: se baja
+            # una sola vez y se reutiliza el mismo bitmap (antes se descargaba dos veces)
             if ($im['TitledHeroArt']) { $capsule = Get-BitmapDesdeUrl $im['TitledHeroArt'].Uri }
+            if ($im['SuperHeroArt'])  { $hero    = Get-BitmapDesdeUrl $im['SuperHeroArt'].Uri }
+            if (-not $hero)           { $hero    = $capsule }
             if ($im['Logo'])          { $logo    = Get-BitmapDesdeUrl $im['Logo'].Uri }
             if (-not $logo -and $im['BoxArt']) { $logo = Get-BitmapDesdeUrl $im['BoxArt'].Uri }
             if ($poster -or $hero) { $origen = 'Microsoft Store (oficial)' }
@@ -460,7 +502,8 @@ function New-CaratulasSteam {
 
     # 3) Assets locales
     $loc = Get-AssetsLocales -Carpeta $Juego.Carpeta -Icono $Juego.Icono
-    if (-not $logo) { $logo = $loc.Logo }
+    $logoDelExe = $false
+    if (-not $logo) { $logo = $loc.Logo; $logoDelExe = [bool]$loc.LogoDelExe }
     $fondoLocal = $loc.Fondo
     if (-not $poster) { Registrar 'Componiendo carátulas con los assets locales del juego...' }
 
@@ -483,14 +526,33 @@ function New-CaratulasSteam {
     else           { $b = New-CaratulaCompuesta -Fondo $null -Logo $null -Ancho 1920 -Alto 620 }
     $rutas['hero'] = Join-Path $GridDir "${AppId}_hero.png"; Save-Png -Bitmap $b -Ruta $rutas['hero']; $b.Dispose()
 
-    # _logo.png y _icon.png
-    if ($logo) {
+    # _logo.png: solo con un logo de verdad, que va suelto encima del hero
+    if ($logo -and -not $logoDelExe -and (Test-EsLogo -Bitmap $logo)) {
         $rutas['logo'] = Join-Path $GridDir "${AppId}_logo.png"; Save-Png -Bitmap $logo -Ruta $rutas['logo']
-        $ic = New-Object System.Drawing.Bitmap($logo, 256, 256)
+    } else {
+        # el de un intento anterior valdria de todas formas: fuera
+        $logoViejo = Join-Path $GridDir "${AppId}_logo.png"
+        if (Test-Path -LiteralPath $logoViejo) { Remove-Item -LiteralPath $logoViejo -Force -ErrorAction SilentlyContinue }
+        if ($logo -and -not $logoDelExe) { Registrar '  la imagen del logo lleva fondo: la uso de icono, pero no como logo suelto' }
+    }
+
+    # _icon.png: cuadrado y sin deformar. Del logo si lo hay (la baldosa de la Store, que no
+    # vale de logo, aqui va perfecta) y si no, recortando la portada al centro.
+    $baseIcono = $null
+    if ($logo -and -not $logoDelExe) { $baseIcono = $logo }
+    $ic = $null
+    if ($baseIcono)   { $ic = New-IconoCuadrado -Origen $baseIcono -Lado 256 }
+    elseif ($poster)  { $ic = New-ImagenCover -Origen $poster  -Ancho 256 -Alto 256 }
+    elseif ($capsule) { $ic = New-ImagenCover -Origen $capsule -Ancho 256 -Alto 256 }
+    if ($ic) {
         $rutas['icon'] = Join-Path $GridDir "${AppId}_icon.png"; Save-Png -Bitmap $ic -Ruta $rutas['icon']; $ic.Dispose()
     }
 
-    foreach ($bm in @($poster, $hero, $capsule, $logo, $fondoLocal)) { if ($bm) { $bm.Dispose() } }
+    # $hero y $capsule pueden ser el mismo bitmap (TitledHeroArt): no repetir el Dispose
+    $sueltos = New-Object System.Collections.ArrayList
+    foreach ($bm in @($poster, $hero, $capsule, $logo, $fondoLocal)) {
+        if ($bm -and -not $sueltos.Contains($bm)) { [void]$sueltos.Add($bm); $bm.Dispose() }
+    }
     Registrar "Carátulas generadas desde: $origen"
     return [pscustomobject]@{ Origen = $origen; Rutas = $rutas; StoreId = $storeId }
 }
