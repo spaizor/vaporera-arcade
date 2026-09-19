@@ -5,7 +5,7 @@
 #  apps de la Store y programas ejecutados hace poco), descarga las
 #  caratulas oficiales y escribe el acceso directo en shortcuts.vdf.
 #
-#  Uso:  .\VaporeraArcade.ps1            (o el .vbs de al lado, sin consola)
+#  Uso:  .\VaporeraArcade.ps1            (o el acceso directo que crea Instalar.ps1)
 #        .\VaporeraArcade.ps1 -Consola   (modo texto, sin ventana)
 # =====================================================================
 param([switch]$Consola, [string]$Juego)
@@ -59,7 +59,7 @@ function Show-AvisoError {
 }
 
 # Cualquier error sin controlar (una lib que no carga, el XAML, Add-Type...) acaba aqui.
-# Lanzado desde el .vbs no hay consola: sin esto la ventana no aparece y no se ve nada.
+# Lanzado desde el acceso directo no hay consola: sin esto la ventana no aparece.
 trap {
     $fallo = $_
     Write-RegistroError -Contexto 'error sin controlar' -Fallo $fallo

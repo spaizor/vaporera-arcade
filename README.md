@@ -48,15 +48,34 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
 
 1. Descarga el proyecto (botón **Code → Download ZIP**) y descomprímelo en una carpeta
    donde tengas permiso de escritura, por ejemplo `Documentos\Vaporera Arcade`.
-2. **Desbloquea los ficheros.** Windows marca como peligrosos los ficheros descargados de
-   internet y puede impedir que se ejecuten. Abre PowerShell en la carpeta y ejecuta:
+2. Haz doble clic en **`Instalar.cmd`**. Desbloquea los ficheros descargados y crea el acceso
+   directo **Vaporera Arcade**, que abre la aplicación sin ventana de consola.
+
+   Si prefieres la consola, o quieres el acceso directo en más sitios:
 
    ```powershell
-   Get-ChildItem -Recurse | Unblock-File
+   powershell -ExecutionPolicy Bypass -File .\Instalar.ps1 -Escritorio -MenuInicio
    ```
 
-   También puedes hacerlo con el ZIP antes de descomprimirlo: clic derecho → *Propiedades* →
-   marcar *Desbloquear*.
+   Las mismas opciones valen con el `.cmd` (`Instalar.cmd -Escritorio`), y con `-Quitar` se
+   borran los accesos directos creados.
+
+   > Es `Instalar.cmd` y no `Instalar.ps1` porque **Windows no ejecuta los `.ps1` con doble
+   > clic**: los abre en un editor. El `.cmd` solo llama al script de al lado.
+
+**Vaporera Arcade es portable: la carpeta que has descomprimido *es* el programa.** El
+instalador no copia nada a ningún otro sitio ni toca el registro de Windows; solo desbloquea
+los ficheros y crea un acceso directo que apunta a esta misma carpeta. Descomprime donde
+quieras tenerlo de forma permanente y **no la borres ni la muevas** después, o el acceso
+directo dejará de funcionar (si la mueves, vuelve a ejecutar el instalador desde la nueva
+ubicación). Lo único que sobra al terminar es el ZIP descargado.
+
+> **SmartScreen y antivirus.** Windows marca como peligroso todo lo que se descarga de
+> internet, y un `.ps1` bajado de la red dispara además el aviso de la directiva de ejecución.
+> Por eso el instalador se lanza con `-ExecutionPolicy Bypass` y lo primero que hace es
+> `Unblock-File` sobre los ficheros de la carpeta. Si tu antivirus protesta, es por el mismo
+> motivo: un script que no está firmado. Puedes leer los scripts antes de ejecutarlos, que para
+> eso el código está a la vista.
 
 > **Importante:** los ficheros `.ps1` están guardados en UTF-8 **con BOM**. Si los editas,
 > mantén esa codificación; si no, PowerShell 5.1 mostrará mal las tildes y la ñ.
@@ -65,7 +84,12 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
 
 ### Con ventana
 
-Haz doble clic en **`Vaporera Arcade.vbs`**. Abre la aplicación sin mostrar la consola.
+Haz doble clic en el acceso directo **Vaporera Arcade** que creó el instalador. Abre la
+aplicación sin mostrar la consola. También puedes ejecutar el script a mano:
+
+```powershell
+powershell -ExecutionPolicy Bypass -STA -File .\VaporeraArcade.ps1
+```
 
 1. Elige un juego de la lista. Puedes filtrarla con el buscador.
 2. Si quieres, cambia el nombre con el que aparecerá en Steam o las opciones de lanzamiento.
@@ -153,6 +177,49 @@ Son limitaciones de Steam y de cada plataforma, no de esta aplicación:
   La aplicación lo cierra sola y espera hasta 40 segundos. Si no se cierra, cancela la operación
   sin tocar nada.
 
+## Privacidad y conexiones
+
+Vaporera Arcade no tiene servidor propio, no registra ningún uso y no envía nada a su autor.
+Todo lo que hace se queda en tu equipo, salvo las consultas necesarias para conseguir las
+carátulas.
+
+**A qué se conecta:**
+
+| Servicio | Cuándo | Qué se envía |
+|---|---|---|
+| `displaycatalog.mp.microsoft.com` | Al preparar carátulas de un juego con identificador de la Store | El identificador del producto |
+| `storeedgefd.dsx.mp.microsoft.com` | Al buscar en el catálogo de la Store por nombre | El nombre del juego |
+| `www.steamgriddb.com` | Solo si has configurado una clave de API | El nombre del juego y tu clave |
+
+Después se descargan las imágenes desde las direcciones que devuelvan esos servicios, que
+apuntan a sus propias redes de distribución. Ninguna petición lleva tu nombre de usuario, el
+del equipo ni ningún identificador que apunte a ti: el único dato fijo que se manda es la
+cabecera `MS-CV: VaporeraArcade.1`, un valor de trazas que es igual para todo el mundo. Con
+el origen de las carátulas en **Solo imágenes del propio juego** no se conecta a nada.
+
+**Qué se guarda en tu equipo:**
+
+- `%LOCALAPPDATA%\VaporeraArcade\config.json`: tu clave de SteamGridDB, **en texto plano**.
+  No está cifrada ni ofuscada. Si compartes ese fichero, compartes la clave.
+- `%LOCALAPPDATA%\VaporeraArcade\vaporera-arcade.log`: el registro de actividad. Contiene
+  **rutas completas** (que incluyen tu nombre de usuario de Windows), los nombres de los juegos
+  que tienes instalados y el **identificador de tu perfil de Steam**. Míralo antes de pegarlo
+  en una incidencia de GitHub o de enviárselo a nadie. Crece sin límite: puedes borrarlo cuando
+  quieras y se vuelve a crear.
+- `%TEMP%\VaporeraArcade\<appid>\`: las imágenes a medio preparar de cada juego (~1,6 MB por
+  juego). No se borran solas.
+- En la carpeta de Steam: el acceso directo en `shortcuts.vdf`, sus copias de seguridad
+  `shortcuts.vdf.bak-<fecha>` y las imágenes de `userdata\<usuario>\config\grid\`.
+
+**Desinstalar del todo:**
+
+1. Borra la carpeta de la aplicación. Si creaste accesos directos en el Escritorio o en el
+   menú Inicio, quítalos antes con `Instalar.cmd -Quitar -Escritorio -MenuInicio`.
+2. Borra `%LOCALAPPDATA%\VaporeraArcade` (ajustes, clave y registro).
+3. Borra `%TEMP%\VaporeraArcade` (imágenes temporales).
+4. Si además quieres deshacer lo hecho en Steam, quita los juegos añadidos (ver *Quitar un
+   juego*) y borra los `shortcuts.vdf.bak-*` de la carpeta `config` de tu perfil de Steam.
+
 ## Quitar un juego
 
 Por ahora no hay botón para quitar juegos. Puedes quitarlo desde Steam (clic derecho sobre el
@@ -174,7 +241,8 @@ Las imágenes de `config\grid\` no se borran solas. Puedes eliminarlas a mano.
 ```
 Vaporera Arcade
 ├── VaporeraArcade.ps1           aplicación: ventana WPF y modo consola
-├── Vaporera Arcade.vbs          lanzador sin ventana de consola
+├── Instalar.cmd                 lanzador del instalador (doble clic)
+├── Instalar.ps1                 desbloquea los ficheros y crea el acceso directo
 └── lib
     ├── Config.ps1               ajustes del usuario (config.json en %LOCALAPPDATA%)
     ├── Vdf.ps1                  lectura y escritura del formato VDF binario y cálculo del appid
