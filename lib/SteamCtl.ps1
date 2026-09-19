@@ -2,39 +2,119 @@
 #  SteamCtl.ps1 - Localizar Steam, cerrarlo/abrirlo y escribir shortcuts.vdf
 # =====================================================================
 
+# Por que Get-SteamInfo devuelve $null. "No encuentro Steam" a secas confunde cuando el
+# problema es que esta instalado pero sin ninguna sesion iniciada, que es lo que pasa en un
+# PC recien montado.
+$script:SteamMotivo = ''
+function Get-SteamMotivo {
+    if ($script:SteamMotivo) { return $script:SteamMotivo }
+    return 'No encuentro la instalación de Steam.'
+}
+
+# El ultimo que inicio sesion, segun loginusers.vdf. Las versiones nuevas de Steam ya no
+# escriben MostRecent (comprobado en la 2026): hay que caer al Timestamp mas alto.
+# El nombre de la carpeta de userdata es el id de cuenta de 32 bits, no el SteamID64.
+function Get-SteamCuentaDeLoginUsers {
+    param([string]$Ruta)
+    if (-not (Test-Path -LiteralPath $Ruta)) { return $null }
+    try {
+        $txt = Get-Content -LiteralPath $Ruta -Raw -Encoding UTF8
+        $re  = [regex]'"(7656\d{13})"\s*\{(?:[^{}]|\{[^{}]*\})*?\}'
+        $mejor = $null; $mejorSello = [int64]-1
+        foreach ($m in $re.Matches($txt)) {
+            $cuenta = [string]([uint64]$m.Groups[1].Value - 76561197960265728)
+            if ($m.Value -match '"MostRecent"\s*"1"') { return $cuenta }
+            $sello = [int64]0
+            if ($m.Value -match '"Timestamp"\s*"(\d+)"') { $sello = [int64]$matches[1] }
+            if ($sello -gt $mejorSello) { $mejorSello = $sello; $mejor = $cuenta }
+        }
+        return $mejor
+    } catch { return $null }
+}
+
+# El identificador de cuenta del usuario que de verdad esta usando Steam en este PC. Antes se
+# cogia el perfil con el localconfig.vdf mas reciente, que con dos cuentas puede ser la
+# equivocada y anadir los juegos a la de otro.
+function Get-SteamCuentaActiva {
+    param([string]$Dir)
+    # 1) sesion iniciada ahora mismo. Es un DWORD: en PS 5.1 llega como Int32 y una cuenta
+    #    por encima de 2^31 saldria negativa, de ahi el rodeo por los bytes.
+    try {
+        $ap = Get-ItemProperty 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop
+        if ($null -ne $ap.ActiveUser) {
+            $id = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$ap.ActiveUser), 0)
+            if ($id -ne 0) { return [string]$id }
+        }
+    } catch { }
+    # 2) el ultimo que inicio sesion
+    return (Get-SteamCuentaDeLoginUsers -Ruta (Join-Path $Dir 'config\loginusers.vdf'))
+}
+
+# -RutaSteam salta la busqueda en el registro. Solo lo usan las pruebas, para poder comprobar
+# las ramas de error sin tocar la instalacion de verdad. No se llama -Dir porque PS no
+# distingue mayusculas y $Dir y $dir serian la misma variable.
 function Get-SteamInfo {
-    $k = Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue
-    $dir = $null
-    if ($k -and $k.SteamPath) { $dir = ($k.SteamPath -replace '/','\') }
-    if (-not $dir -or -not (Test-Path -LiteralPath $dir)) {
-        foreach ($c in @((Join-Path ${env:ProgramFiles(x86)} 'Steam'), (Join-Path $env:ProgramFiles 'Steam'))) {
-            if (Test-Path -LiteralPath $c) { $dir = $c; break }
+    param([string]$RutaSteam = '')
+    $script:SteamMotivo = ''
+    $dir = $RutaSteam
+    if (-not $dir) {
+        $k = Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction SilentlyContinue
+        if ($k -and $k.SteamPath) { $dir = ($k.SteamPath -replace '/','\') }
+        if (-not $dir -or -not (Test-Path -LiteralPath $dir)) {
+            foreach ($c in @((Join-Path ${env:ProgramFiles(x86)} 'Steam'), (Join-Path $env:ProgramFiles 'Steam'))) {
+                if (Test-Path -LiteralPath $c) { $dir = $c; break }
+            }
         }
     }
-    if (-not $dir) { return $null }
+    if (-not $dir) {
+        $script:SteamMotivo = 'No encuentro la instalación de Steam.'
+        return $null
+    }
 
+    # El registro conserva la ruta aunque se haya desinstalado Steam. Sin esta comprobacion la
+    # aplicacion cree que lo ha encontrado, da por cerrado lo que no esta abierto y falla mas
+    # tarde, al escribir o al volver a abrirlo.
     $exe = Join-Path $dir 'steam.exe'
+    if (-not (Test-Path -LiteralPath $exe)) {
+        $script:SteamMotivo = "Encuentro la carpeta de Steam en $dir, pero no el steam.exe. ¿Se ha desinstalado?"
+        return $null
+    }
+
     $userdata = Join-Path $dir 'userdata'
     $perfiles = @()
     if (Test-Path -LiteralPath $userdata) {
-        $perfiles = Get-ChildItem -LiteralPath $userdata -Directory -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Name -match '^\d+$' -and $_.Name -ne '0' }
+        $perfiles = @(Get-ChildItem -LiteralPath $userdata -Directory -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -match '^\d+$' -and $_.Name -ne '0' })
     }
-    # si hay varios perfiles nos quedamos con el de config mas reciente
-    $perfil = $perfiles | Sort-Object {
-        $c = Join-Path $_.FullName 'config\localconfig.vdf'
-        if (Test-Path -LiteralPath $c) { (Get-Item -LiteralPath $c).LastWriteTime } else { [datetime]::MinValue }
-    } -Descending | Select-Object -First 1
-    if (-not $perfil) { return $null }
+    if ($perfiles.Count -eq 0) {
+        $script:SteamMotivo = 'Steam está instalado, pero todavía no hay ningún perfil. Ábrelo, inicia sesión una vez y vuelve a intentarlo.'
+        return $null
+    }
+
+    $cuenta = Get-SteamCuentaActiva -Dir $dir
+    $perfil = $null; $comoElegido = ''
+    if ($cuenta) { $perfil = $perfiles | Where-Object { $_.Name -eq $cuenta } | Select-Object -First 1 }
+    if ($perfil) {
+        $comoElegido = 'sesión iniciada'
+    } else {
+        # de reserva, lo de antes: el perfil tocado mas recientemente
+        $perfil = $perfiles | Sort-Object {
+            $c = Join-Path $_.FullName 'config\localconfig.vdf'
+            if (Test-Path -LiteralPath $c) { (Get-Item -LiteralPath $c).LastWriteTime } else { [datetime]::MinValue }
+        } -Descending | Select-Object -First 1
+        $comoElegido = 'el más reciente'
+    }
 
     $config = Join-Path $perfil.FullName 'config'
     [pscustomobject]@{
-        Dir       = $dir
-        Exe       = $exe
-        UserId    = $perfil.Name
-        ConfigDir = $config
-        Shortcuts = Join-Path $config 'shortcuts.vdf'
-        GridDir   = Join-Path $config 'grid'
+        Dir         = $dir
+        Exe         = $exe
+        UserId      = $perfil.Name
+        ConfigDir   = $config
+        Shortcuts   = Join-Path $config 'shortcuts.vdf'
+        GridDir     = Join-Path $config 'grid'
+        Perfiles    = $perfiles.Count
+        ComoElegido = $comoElegido
     }
 }
 

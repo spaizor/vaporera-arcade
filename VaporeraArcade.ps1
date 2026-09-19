@@ -261,7 +261,7 @@ function Invoke-AnadirJuego {
 if ($Consola) {
     $LogConsola = { param($m) Write-Host $m; Write-Registro $m }
     $steam = Get-SteamInfo
-    if (-not $steam) { Write-Host 'No encuentro la instalación de Steam.' -ForegroundColor Red; exit 1 }
+    if (-not $steam) { Write-Host (Get-SteamMotivo) -ForegroundColor Red; exit 1 }
     $todos = Get-TodosLosJuegos -IncluirRecientes -IncluirApps -Log $LogConsola
     if ($Juego) { $todos = $todos | Where-Object { Test-Contiene $_.Nombre $Juego } }
     if (-not $todos) { Write-Host 'Ningún juego detectado con ese filtro.'; exit 1 }
@@ -776,7 +776,7 @@ $ctl.BtnPreparar.Add_Click({ Invoke-Ocupado { Invoke-Preparar } })
 
 function Invoke-Anadir {
     if (-not $script:Preparado) { return }
-    if (-not $script:Steam) { Add-Log 'No encuentro Steam.'; return }
+    if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
     try {
         $p = $script:Preparado
         $p.Juego.LaunchOptions = $ctl.TxtOpciones.Text
@@ -797,8 +797,12 @@ $win.Title = "Vaporera Arcade $AppVersion"
 $ctl.TxtVersion.Text = "v$AppVersion"
 if ($script:Steam) {
     $ctl.TxtSteam.Text = "Perfil $($script:Steam.UserId)  ~  $($script:Steam.Shortcuts)"
+    # con varias cuentas en el mismo PC conviene dejar claro en cual se va a escribir
+    if ($script:Steam.Perfiles -gt 1) {
+        Write-Registro "Hay $($script:Steam.Perfiles) perfiles de Steam; se usa el $($script:Steam.UserId) ($($script:Steam.ComoElegido))."
+    }
 } else {
-    $ctl.TxtSteam.Text = 'No encuentro la instalación de Steam.'
+    $ctl.TxtSteam.Text = Get-SteamMotivo
 }
 Update-Botones
 

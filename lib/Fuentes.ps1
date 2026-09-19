@@ -29,12 +29,59 @@ function New-Juego {
 # ---------------------------------------------------------------------
 #  Xbox / Game Pass  ->  C:\XboxGames\<Juego>\Content\gamelaunchhelper.exe
 # ---------------------------------------------------------------------
+# Raices donde buscar juegos instalados. Get-PSDrive devuelve tambien unidades de red y
+# lectores: un Test-Path sobre una unidad de red desconectada tarda segundos y la ventana se
+# queda parada nada mas arrancar. Solo unidades fijas (Win32_LogicalDisk DriveType 3).
+function Get-UnidadesFijas {
+    try {
+        return @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
+                 ForEach-Object { $_.DeviceID + '\' })
+    } catch {
+        # de reserva: PSDrive sin DisplayRoot (las de red si lo tienen)
+        return @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
+                 Where-Object { -not $_.DisplayRoot } | ForEach-Object { $_.Root })
+    }
+}
+
+# La carpeta de los juegos de Xbox no tiene por que ser <unidad>\XboxGames: el usuario la elige
+# al instalar y la de verdad esta en el fichero .GamingRoot de la raiz de cada unidad.
+# Formato (comprobado): 'RGBX' + un DWORD + la ruta en UTF-16LE terminada en nulo, normalmente
+# relativa a la unidad ("XboxGames"), a veces absoluta.
+function Get-RaizDeGamingRoot {
+    param([string]$Unidad)
+    $f = Join-Path $Unidad '.GamingRoot'
+    if (-not (Test-Path -LiteralPath $f)) { return $null }
+    try {
+        $b = [IO.File]::ReadAllBytes($f)
+        if ($b.Length -le 8) { return $null }
+        if ([Text.Encoding]::ASCII.GetString($b, 0, 4) -ne 'RGBX') { return $null }
+        $txt = [Text.Encoding]::Unicode.GetString($b, 8, $b.Length - 8)
+        $ruta = ($txt -split "`0" | Where-Object { $_ } | Select-Object -First 1)
+        if (-not $ruta) { return $null }
+        if ($ruta -match '^[A-Za-z]:') { return $ruta }        # absoluta
+        return (Join-Path $Unidad $ruta)                        # relativa a la unidad
+    } catch { return $null }
+}
+
+# Las raices donde mirar: la del .GamingRoot de cada unidad fija y, siempre, la de por defecto.
+function Get-RaicesXbox {
+    $vistas = @{}
+    $res = @()
+    foreach ($unidad in (Get-UnidadesFijas)) {
+        foreach ($cand in @((Get-RaizDeGamingRoot -Unidad $unidad), (Join-Path $unidad 'XboxGames'))) {
+            if (-not $cand) { continue }
+            $clave = $cand.TrimEnd('\').ToLower()
+            if ($vistas.ContainsKey($clave)) { continue }
+            $vistas[$clave] = $true
+            if (Test-Path -LiteralPath $cand) { $res += $cand }
+        }
+    }
+    return $res
+}
+
 function Get-JuegosXbox {
     $res = @()
-    $unidades = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
-                Where-Object { Test-Path -LiteralPath (Join-Path $_.Root 'XboxGames') }
-    foreach ($u in $unidades) {
-        $raiz = Join-Path $u.Root 'XboxGames'
+    foreach ($raiz in (Get-RaicesXbox)) {
         foreach ($dir in Get-ChildItem -LiteralPath $raiz -Directory -ErrorAction SilentlyContinue) {
             if ($dir.Name -eq 'GameSave') { continue }
             $content = Join-Path $dir.FullName 'Content'
@@ -46,7 +93,12 @@ function Get-JuegosXbox {
             if (Test-Path -LiteralPath $cfg) {
                 try {
                     [xml]$x = Get-Content -LiteralPath $cfg -Raw -Encoding UTF8
-                    if ($x.Game.ShellVisuals.DefaultDisplayName) { $nombre = $x.Game.ShellVisuals.DefaultDisplayName }
+                    # DefaultDisplayName puede venir como "ms-resource:AppTitle": es una
+                    # referencia al catalogo de recursos del paquete, no un nombre. Resolverlo
+                    # de verdad hace falta el paquete instalado; el nombre de la carpeta, que
+                    # Windows saca del titulo real, es mejor que ensenar "ms-resource:...".
+                    $nom = $x.Game.ShellVisuals.DefaultDisplayName
+                    if ($nom -and $nom -notmatch '^ms-resource:') { $nombre = $nom }
                     if ($x.Game.StoreId) { $storeId = $x.Game.StoreId }
                     foreach ($cand in @($x.Game.ShellVisuals.Square480x480Logo, $x.Game.ShellVisuals.Square150x150Logo, $x.Game.ShellVisuals.StoreLogo)) {
                         if ($cand) {
@@ -96,8 +148,13 @@ function Get-JuegosUbisoft {
         $info = Get-Item -LiteralPath $dir -ErrorAction SilentlyContinue
         if (-not $info) { continue }
         $nombre = Split-Path $dir.TrimEnd('\') -Leaf
+        # El exe solo se usa para sacar el icono. Con -Recurse a pelo esto recorre el juego
+        # entero: en uno de 100 GB tarda minutos y congela la ventana. Dos niveles bastan
+        # (el ejecutable esta en la raiz o en bin\, Binaries\...) y se descartan los
+        # instaladores y utilidades, que si no ganan por tamano en algunos juegos.
         $icono = ''
-        $exeGrande = Get-ChildItem -LiteralPath $dir -Filter *.exe -Recurse -ErrorAction SilentlyContinue |
+        $exeGrande = Get-ChildItem -LiteralPath $dir -Filter *.exe -Recurse -Depth 2 -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -notmatch '^(unins|setup|install|vcredist|vc_redist|dxsetup|dotnet|oalinst|UbisoftGameLauncher|UplayCrashReporter|.*[Cc]rash.*)' } |
                      Sort-Object Length -Descending | Select-Object -First 1
         if ($exeGrande) { $icono = $exeGrande.FullName }
         $res += New-Juego -Nombre $nombre -Fuente 'Ubisoft Connect' `
@@ -111,19 +168,69 @@ function Get-JuegosUbisoft {
 # ---------------------------------------------------------------------
 #  Epic Games  ->  manifiestos .item
 # ---------------------------------------------------------------------
+# El exe del lanzador no esta en ninguna clave de instalacion: el registro de Epic solo guarda
+# AppDataPath (comprobado). Sale del handler del protocolo, que es quien lo sabe siempre.
+function Get-EpicLauncherExe {
+    try {
+        $cmd = (Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\com.epicgames.launcher\shell\open\command' -ErrorAction Stop).'(default)'
+        if ($cmd -match '^"([^"]+)"') {
+            if (Test-Path -LiteralPath $matches[1]) { return $matches[1] }
+        }
+    } catch { }
+    foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        if (-not $base) { continue }
+        foreach ($bits in @('Win64','Win32')) {
+            $c = Join-Path $base "Epic Games\Launcher\Portal\Binaries\$bits\EpicGamesLauncher.exe"
+            if (Test-Path -LiteralPath $c) { return $c }
+        }
+    }
+    return $null
+}
+
+# Un manifiesto .item no es siempre un juego: hay motores (Unreal Engine), plugins, DLC y
+# descargas a medias. Lo que se cuela aqui acaba en la lista como si fuera un juego mas.
+function Test-EpicEsJuego {
+    param($Manifiesto)
+    if ($Manifiesto.bIsIncompleteInstall) { return $false }
+    # los DLC apuntan con MainGameAppName al juego del que cuelgan
+    if ($Manifiesto.MainGameAppName -and $Manifiesto.MainGameAppName -ne $Manifiesto.AppName) { return $false }
+    $cats = @()
+    if ($Manifiesto.AppCategories) { $cats = @($Manifiesto.AppCategories) }
+    # sin categorias no se puede decidir: se deja pasar, mas vale de mas que de menos
+    if ($cats.Count -eq 0) { return $true }
+    return ($cats -contains 'games')
+}
+
 function Get-JuegosEpic {
     $res = @()
     $man = Join-Path $env:ProgramData 'Epic\EpicGamesLauncher\Data\Manifests'
     if (-not (Test-Path -LiteralPath $man)) { return $res }
+    $launcher = Get-EpicLauncherExe
     foreach ($f in Get-ChildItem -LiteralPath $man -Filter *.item -ErrorAction SilentlyContinue) {
         try { $j = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
         if (-not $j.InstallLocation -or -not $j.LaunchExecutable) { continue }
+        if (-not (Test-EpicEsJuego $j)) { continue }
         $exe = Join-Path $j.InstallLocation $j.LaunchExecutable
         if (-not (Test-Path -LiteralPath $exe)) { continue }
-        $res += New-Juego -Nombre $j.DisplayName -Fuente 'Epic Games' `
-                -Exe $exe -StartDir ((Split-Path $exe -Parent) + '\') -Icono $exe `
-                -Carpeta $j.InstallLocation -Detalle 'Ejecutable directo del juego' `
-                -Fecha $f.LastWriteTime
+
+        if ($launcher -and $j.AppName) {
+            # Por el lanzador, como Ubisoft: el .exe directo falla en los juegos que comprueban
+            # la propiedad o necesitan los servicios online. El icono sigue saliendo del exe del
+            # juego, que si no seria el del lanzador para todos.
+            # La URI se monta concatenando: en "...apps/$id?action=..." PS leeria $id?action
+            # como nombre de variable.
+            $uri = 'com.epicgames.launcher://apps/' + $j.AppName + '?action=launch&silent=true'
+            $res += New-Juego -Nombre $j.DisplayName -Fuente 'Epic Games' `
+                    -Exe $launcher -StartDir ((Split-Path $launcher -Parent) + '\') `
+                    -LaunchOptions $uri -Icono $exe `
+                    -Carpeta $j.InstallLocation -Detalle 'URI de Epic (el .exe directo falla en los juegos con comprobación online)' `
+                    -Fecha $f.LastWriteTime
+        } else {
+            $res += New-Juego -Nombre $j.DisplayName -Fuente 'Epic Games' `
+                    -Exe $exe -StartDir ((Split-Path $exe -Parent) + '\') -Icono $exe `
+                    -Carpeta $j.InstallLocation -Detalle 'Ejecutable directo del juego (no encuentro el lanzador de Epic)' `
+                    -Fecha $f.LastWriteTime
+        }
     }
     return $res
 }
@@ -177,17 +284,49 @@ function ConvertFrom-Rot13 {
     return $sb.ToString()
 }
 
-$script:GuidCarpetas = @{
-    '{6D809377-6AF0-444B-8957-A3773F02200E}' = ${env:ProgramFiles}
-    '{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}' = ${env:ProgramFiles(x86)}
-    '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}' = "$env:SystemRoot\System32"
-    '{F38BF404-1D43-42F2-9305-67DE0B28FC23}' = $env:SystemRoot
-    '{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}' = "$env:SystemRoot\System32"
-    '{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}' = "$env:USERPROFILE\Desktop"
-    '{0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8}' = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
-    '{A4115719-D62E-491D-AA7C-E74B8BE3B067}' = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
-    '{9E3995AB-1F9C-4F13-B827-48B24B6C7174}' = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned"
+# UserAssist guarda las rutas con la carpeta inicial como GUID (KNOWNFOLDERID). Lo que no se
+# sabe resolver se descarta mas abajo en silencio, asi que un GUID que falte o que apunte mal
+# hace desaparecer programas de "Recientes" sin decir nada.
+# Las carpetas del usuario se resuelven con GetFolderPath, no a mano desde %USERPROFILE%: con
+# OneDrive, Escritorio y Documentos estan redirigidos y la ruta fija no existiria.
+function Get-CarpetaEspecial {
+    param([string]$Nombre)
+    try { return [Environment]::GetFolderPath([Environment+SpecialFolder]::$Nombre) } catch { return '' }
 }
+
+$script:GuidCarpetas = @{
+    '{6D809377-6AF0-444B-8957-A3773F02200E}' = (Get-CarpetaEspecial 'ProgramFiles')            # ProgramFilesX64
+    '{905E63B6-C1BF-494E-B29C-65B732D3D21A}' = (Get-CarpetaEspecial 'ProgramFiles')            # ProgramFiles
+    '{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}' = (Get-CarpetaEspecial 'ProgramFilesX86')
+    '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}' = (Get-CarpetaEspecial 'System')                  # System32
+    '{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}' = (Get-CarpetaEspecial 'SystemX86')               # SysWOW64, no System32
+    '{F38BF404-1D43-42F2-9305-67DE0B28FC23}' = (Get-CarpetaEspecial 'Windows')
+    '{5E6C858F-0E22-4760-9AFE-EA3317B67173}' = (Get-CarpetaEspecial 'UserProfile')
+    '{0762D272-C50A-4BB0-A382-697DCD729B80}' = (Split-Path (Get-CarpetaEspecial 'UserProfile') -Parent)  # C:\Users
+    '{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}' = (Get-CarpetaEspecial 'DesktopDirectory')
+    '{C4AA340D-F20F-4863-AFEF-F87EF2E6BA25}' = (Get-CarpetaEspecial 'CommonDesktopDirectory')
+    '{FDD39AD0-238F-46AF-ADB4-6C85480369C7}' = (Get-CarpetaEspecial 'MyDocuments')
+    '{4BD8D571-6D19-48D3-BE97-422220080E43}' = (Get-CarpetaEspecial 'MyMusic')
+    '{33E28130-4E1E-4676-835A-98395C3BC3BB}' = (Get-CarpetaEspecial 'MyPictures')
+    '{18989B1D-99B5-455B-841C-AB7C74E4DDFC}' = (Get-CarpetaEspecial 'MyVideos')
+    '{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}' = (Get-CarpetaEspecial 'LocalApplicationData')
+    '{3EB685DB-65F9-4CF6-A03A-E3EF65729F3D}' = (Get-CarpetaEspecial 'ApplicationData')
+    '{625B53C3-AB48-4EC1-BA1F-A1EF4146FC19}' = (Get-CarpetaEspecial 'StartMenu')
+    '{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}' = (Get-CarpetaEspecial 'Programs')
+    '{B97D20BB-F46A-4C97-BA10-5E3608430854}' = (Get-CarpetaEspecial 'Startup')
+    '{A4115719-D62E-491D-AA7C-E74B8BE3B067}' = (Get-CarpetaEspecial 'CommonStartMenu')         # sin \Programs
+    '{0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8}' = (Get-CarpetaEspecial 'CommonPrograms')
+    '{9E3995AB-1F9C-4F13-B827-48B24B6C7174}' = (Join-Path (Get-CarpetaEspecial 'ApplicationData') 'Microsoft\Internet Explorer\Quick Launch\User Pinned')
+}
+
+# Descargas no tiene SpecialFolder: se lee del registro, que tambien refleja la redireccion.
+$script:RutaDescargas = ''
+try {
+    $usf = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction Stop
+    $script:RutaDescargas = [Environment]::ExpandEnvironmentVariables($usf.'{374DE290-123F-4565-9164-39C4925E467B}')
+} catch { }
+if (-not $script:RutaDescargas) { $script:RutaDescargas = Join-Path (Get-CarpetaEspecial 'UserProfile') 'Downloads' }
+$script:GuidCarpetas['{374DE290-123F-4565-9164-39C4925E467B}'] = $script:RutaDescargas
 
 function Get-ProgramasRecientes {
     param([int]$Maximo = 60)
@@ -201,8 +340,9 @@ function Get-ProgramasRecientes {
         foreach ($nombreVal in $item.GetValueNames()) {
             $ruta = ConvertFrom-Rot13 $nombreVal
             if ($ruta -notmatch '\.exe$') { continue }
-            foreach ($g in $script:GuidCarpetas.Keys) {
-                if ($ruta.StartsWith($g, 'OrdinalIgnoreCase')) {
+            foreach ($g in @($script:GuidCarpetas.Keys)) {
+                # sin el -and, un GUID que no se haya podido resolver dejaria una ruta relativa
+                if ($script:GuidCarpetas[$g] -and $ruta.StartsWith($g, 'OrdinalIgnoreCase')) {
                     $ruta = $script:GuidCarpetas[$g] + $ruta.Substring($g.Length); break
                 }
             }
