@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 # Version de la aplicacion. Sale en el titulo de la ventana, junto al nombre de la cabecera, en
 # la primera linea del registro y en el historial del README.md: los cuatro tienen que ir
 # sincronizados. El XAML es una cadena literal y no interpola: la ventana la pone por codigo.
-$AppVersion = '0.5'
+$AppVersion = '0.6'
 
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TempDir = Join-Path $env:TEMP 'VaporeraArcade'
@@ -565,14 +565,27 @@ function Update-Botones {
 # que es una bomba de mensajes: sin esto WPF atiende clics en Refrescar, Examinar, las casillas
 # o la lista DENTRO de la escritura del VDF, con Steam cerrado y el fichero a medio escribir.
 function Invoke-Ocupado {
-    param([Parameter(Mandatory)][scriptblock]$Accion)
+    param(
+        [Parameter(Mandatory)][scriptblock]$Accion,
+        # Nombre del boton que mientras dura la operacion cambia de texto, para que se vea que
+        # esta trabajando y no colgado: todo va en el hilo de la UI y las descargas de imagenes
+        # dejan la ventana sin responder un buen rato.
+        [string]$Boton = '',
+        [string]$TextoOcupado = ''
+    )
     if ($script:Ocupado) { return }          # nunca anidado
     $script:Ocupado = $true
+    $textoAntes = $null
+    if ($Boton -and $TextoOcupado) {
+        $textoAntes = $ctl[$Boton].Content
+        $ctl[$Boton].Content = $TextoOcupado
+    }
     foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $false }
     try { & $Accion }
     finally {
         # el orden importa: la marca primero, para no dejarla puesta si algo falla al reactivar
         $script:Ocupado = $false
+        if ($null -ne $textoAntes) { $ctl[$Boton].Content = $textoAntes }
         foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $true }
         Update-Botones
     }
@@ -770,6 +783,12 @@ function Invoke-Preparar {
     $nombre = $ctl.TxtNombre.Text.Trim()
     if (-not $nombre) { Add-Log 'El nombre no puede estar vacío.'; return }
 
+    # Aviso antes de empezar: las imagenes se descargan en el hilo de la UI y la ventana se
+    # queda sin responder hasta que termina. Decirlo no lo arregla, pero evita que parezca
+    # que la aplicacion se ha colgado (el arreglo de verdad es sacarlo a un runspace).
+    Add-Log "Preparando carátulas de '$nombre'. Puede tardar hasta un minuto."
+    Add-Log 'Mientras descarga las imágenes la ventana no responderá. Es normal: espera.'
+
     try {
         $j.LaunchOptions = $ctl.TxtOpciones.Text
         $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $j.Exe + '"') -AppName $nombre
@@ -791,7 +810,7 @@ function Invoke-Preparar {
         Write-RegistroError -Contexto 'preparar carátulas' -Fallo $_
     }
 }
-$ctl.BtnPreparar.Add_Click({ Invoke-Ocupado { Invoke-Preparar } })
+$ctl.BtnPreparar.Add_Click({ Invoke-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Preparando…' -Accion { Invoke-Preparar } })
 
 function Invoke-Anadir {
     if (-not $script:Preparado) { return }
@@ -809,7 +828,7 @@ function Invoke-Anadir {
         Write-RegistroError -Contexto 'añadir a Steam' -Fallo $_
     }
 }
-$ctl.BtnAnadir.Add_Click({ Invoke-Ocupado { Invoke-Anadir } })
+$ctl.BtnAnadir.Add_Click({ Invoke-Ocupado -Boton 'BtnAnadir' -TextoOcupado 'Añadiendo…' -Accion { Invoke-Anadir } })
 
 # --- arranque --------------------------------------------------------
 $win.Title = "Vaporera Arcade $AppVersion"

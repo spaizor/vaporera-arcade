@@ -8,7 +8,7 @@ averiguar cómo se lanza cada juego y conseguir las imágenes con el tamaño cor
 Arcade lo hace por ti. Detecta lo que tienes instalado, descarga el arte oficial y crea el
 acceso directo, de modo que el juego aparece en Big Picture como uno más.
 
-<!-- TODO: captura de la ventana principal (docs/captura.png) -->
+![La ventana de Vaporera Arcade, con la lista de juegos detectados a la izquierda y la vista previa de las carátulas a la derecha](docs/captura.png)
 
 ## Características
 
@@ -272,6 +272,12 @@ junto al nombre en la cabecera de la ventana.
 
 ## Historial de versiones
 
+- **0.6** (22-09-2026): detección más robusta en equipos distintos al de desarrollo. Los
+  juegos de Xbox se buscan en la carpeta real (`.GamingRoot`) y solo en unidades fijas; Epic
+  se lanza por la URI del lanzador; GOG respeta los argumentos y la carpeta de inicio del
+  registro; el perfil de Steam se elige por la sesión activa y se avisa cuando falta Steam o
+  no hay ningún perfil. Además, un origen que falle ya no deja la lista vacía, `shortcuts.vdf`
+  se escribe de forma atómica y la ventana no acepta acciones a medio escribir.
 - **0.5** (18-09-2026): primera versión numerada. Detección de Xbox Game Pass, Epic Games, GOG,
   Ubisoft Connect, apps de la Microsoft Store y programas recientes; carátulas desde el catálogo
   de la Store, SteamGridDB o las imágenes del propio juego, con vista previa antes de tocar
