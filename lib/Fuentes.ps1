@@ -237,6 +237,15 @@ function Get-JuegosEpic {
 
 # ---------------------------------------------------------------------
 #  GOG Galaxy
+#
+#  PENDIENTE DE PROBAR CON UN JUEGO DE VERDAD (22-09-2026). Es el unico origen que no se ha
+#  verificado en una instalacion real: no hay GOG Galaxy en el PC de desarrollo, asi que esto
+#  esta probado solo contra claves de registro sinteticas. Nadie ha visto todavia un juego de
+#  GOG detectado, anadido y arrancado desde Steam.
+#  Cuando haya con que probar, mirar las dos cosas que no se pueden resolver a ciegas:
+#    - launchParam se copia TAL CUAL a LaunchOptions del VDF. Si GOG mete rutas entrecomilladas
+#      o argumentos con espacios, hay que ver si Steam los pasa igual o hay que reescribirlos.
+#    - Si workingDir es de fiar como carpeta de inicio del juego.
 # ---------------------------------------------------------------------
 function Get-JuegosGog {
     $res = @()
@@ -246,8 +255,21 @@ function Get-JuegosGog {
             if (-not $p.path -or -not $p.exe) { continue }
             $exe = if (Test-Path -LiteralPath $p.exe) { $p.exe } else { Join-Path $p.path $p.exe }
             if (-not (Test-Path -LiteralPath $exe)) { continue }
+            # GOG guarda junto al exe los argumentos con los que hay que lanzarlo
+            # (launchParam) y su carpeta de trabajo (workingDir), y antes se ignoraban los
+            # dos. Sin launchParam hay juegos que arrancan en la configuracion que no toca
+            # (o no arrancan); sin workingDir, los que esperan estar en su carpeta no
+            # encuentran sus datos. Los dos valores son opcionales: si no estan, se queda
+            # como estaba, con la carpeta del propio exe.
+            $trabajo = ''
+            if ($p.workingDir) { $trabajo = ([string]$p.workingDir) -replace '/','\' }
+            if (-not $trabajo -or -not (Test-Path -LiteralPath $trabajo)) { $trabajo = Split-Path $exe -Parent }
+            # '$parametros' y no '$args': $args es una variable automatica de PowerShell
+            # (los argumentos sin enlazar de la funcion) y no hay que pisarla.
+            $parametros = ''
+            if ($p.launchParam) { $parametros = ([string]$p.launchParam).Trim() }
             $res += New-Juego -Nombre $p.gameName -Fuente 'GOG' `
-                    -Exe $exe -StartDir ((Split-Path $exe -Parent) + '\') -Icono $exe `
+                    -Exe $exe -StartDir ($trabajo.TrimEnd('\') + '\') -LaunchOptions $parametros -Icono $exe `
                     -Carpeta $p.path -Detalle 'Ejecutable directo del juego'
         }
     }

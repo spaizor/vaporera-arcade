@@ -19,7 +19,19 @@
 Add-Type -AssemblyName System.Drawing
 
 function Initialize-Tls {
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+    # Antes esto asignaba Tls12 a secas y se cargaba lo que hubiera. Windows 11 arranca en
+    # SystemDefault, que deja elegir al sistema y ya incluye TLS 1.2 y 1.3: sustituirlo por
+    # Tls12 deja al proceso SIN TLS 1.3. Y un '-bor' tampoco salva el caso, porque
+    # SystemDefault vale 0 en el enum (comprobado) y '0 -bor Tls12' vuelve a dar Tls12.
+    # Asi que solo se toca cuando el proceso trae protocolos viejos configurados a mano
+    # (Windows 8.1 o una directiva: SSL3|Tls) y falta TLS 1.2, y entonces se SUMA.
+    try {
+        $actual = [Net.ServicePointManager]::SecurityProtocol
+        if ($actual -ne [Net.SecurityProtocolType]::SystemDefault -and
+            -not ($actual -band [Net.SecurityProtocolType]::Tls12)) {
+            [Net.ServicePointManager]::SecurityProtocol = $actual -bor [Net.SecurityProtocolType]::Tls12
+        }
+    } catch { }
 }
 
 # ---------------------------------------------------------------------

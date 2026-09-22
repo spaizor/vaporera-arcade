@@ -265,10 +265,29 @@ if ($Consola) {
     $todos = Get-TodosLosJuegos -IncluirRecientes -IncluirApps -Log $LogConsola
     if ($Juego) { $todos = $todos | Where-Object { Test-Contiene $_.Nombre $Juego } }
     if (-not $todos) { Write-Host 'Ningún juego detectado con ese filtro.'; exit 1 }
+    # @(): con un solo juego detectado, Get-TodosLosJuegos devuelve el objeto suelto (PS
+    # desenvuelve los arrays de un elemento) y no tendria .Count para validar el rango.
+    $lista = @($todos)
     $i = 0
-    $todos | ForEach-Object { Write-Host ("[{0,2}] {1,-45} {2}" -f $i, $_.Nombre, $_.Fuente); $i++ }
-    $sel = Read-Host 'Número del juego a añadir'
-    $j = $todos[[int]$sel]
+    $lista | ForEach-Object { Write-Host ("[{0,2}] {1,-45} {2}" -f $i, $_.Nombre, $_.Fuente); $i++ }
+    # Lo que teclea el usuario no vale hasta comprobarlo. Antes iba directo a '$todos[[int]$sel]':
+    # un texto o un Intro a secas lanzaban al convertir a [int] y saltaba el trap, como si se
+    # hubiera roto la aplicacion; un negativo indexa DESDE EL FINAL y anadia en silencio un
+    # juego que no era el elegido; y uno fuera de rango daba $null y reventaba despues en el
+    # binding de Invoke-AnadirJuego.
+    $j = $null
+    while ($null -eq $j) {
+        $sel = Read-Host 'Número del juego a añadir (Intro para salir)'
+        if ([string]::IsNullOrWhiteSpace($sel)) { Write-Host 'Cancelado.'; exit 1 }
+        $n = 0
+        if (-not [int]::TryParse($sel.Trim(), [ref]$n)) {
+            Write-Host 'Eso no es un número.' -ForegroundColor Yellow
+        } elseif ($n -lt 0 -or $n -ge $lista.Count) {
+            Write-Host ("Elige un número entre 0 y {0}." -f ($lista.Count - 1)) -ForegroundColor Yellow
+        } else {
+            $j = $lista[$n]
+        }
+    }
     $r = Invoke-AnadirJuego -Juego $j -Nombre $j.Nombre -Steam $steam -Log $LogConsola
     exit $(if ($r.Ok) { 0 } else { 1 })
 }

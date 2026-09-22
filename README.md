@@ -1,4 +1,4 @@
-# Vaporera Arcade
+﻿# Vaporera Arcade
 
 Añade a tu biblioteca de Steam los juegos de otras plataformas (Xbox Game Pass, Epic Games,
 GOG, Ubisoft Connect, Microsoft Store…) con un par de clics, y con sus carátulas.
@@ -19,13 +19,17 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   | Xbox / Game Pass | `<unidad>\XboxGames\*\Content\` | `gamelaunchhelper.exe`, el lanzador oficial |
   | Ubisoft Connect | Registro de Windows | `UbisoftConnect.exe` con `uplay://launch/<id>/0` |
   | Epic Games | Manifiestos de `ProgramData\Epic` | El ejecutable del juego |
-  | GOG | Registro de Windows | El ejecutable del juego |
+  | GOG ¹ | Registro de Windows | El ejecutable del juego, con los argumentos del registro |
   | Apps de la Microsoft Store | Menú Inicio | `explorer.exe shell:AppsFolder\<AUMID>` |
   | Programas recientes | Historial de ejecución de Windows | El ejecutable |
   | Cualquier otro | Botón *Examinar .exe…* | El ejecutable |
 
   Las apps de la Store y los programas recientes están desactivados por defecto, porque llenan
   la lista de cosas que no son juegos. Se activan con sus casillas.
+
+  ¹ **GOG está sin confirmar.** Es el único origen que no se ha podido probar con un juego
+  instalado de verdad, porque no había GOG Galaxy en el equipo donde se desarrolla. Debería
+  funcionar, pero si tienes juegos de GOG y algo no va, [abre una issue](https://github.com/spaizor/vaporera-arcade/issues).
 
 - **Carátulas automáticas.** Genera las imágenes que usa Steam: portada, cápsula, hero,
   logo e icono.
