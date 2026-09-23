@@ -5,7 +5,7 @@
 #  apps de la Store y programas ejecutados hace poco), descarga las
 #  caratulas oficiales y escribe el acceso directo en shortcuts.vdf.
 #
-#  Uso:  .\VaporeraArcade.ps1            (o el acceso directo que crea Instalar.ps1)
+#  Uso:  .\VaporeraArcade.ps1            (o el acceso directo que crea CrearAccesoDirecto.ps1)
 #        .\VaporeraArcade.ps1 -Consola   (modo texto, sin ventana)
 # =====================================================================
 param([switch]$Consola, [string]$Juego)
@@ -204,6 +204,17 @@ function Invoke-AnadirJuego {
     # a partir de aqui Steam esta cerrado: pase lo que pase, se vuelve a abrir en el finally
     $escrito = $false
     try {
+        # Otra vez, ahora con Steam cerrado: al salir reescribe shortcuts.vdf y lo leido antes
+        # puede haber cambiado. Tiene que ir antes de copiar las imagenes: con un duplicado del
+        # mismo appid, copiarlas machacaria las del acceso directo que ya existe.
+        if (-not $Reemplazar) {
+            $dup = Test-ShortcutDuplicado -RutaVdf $Steam.Shortcuts -Nombre $Nombre -Exe $Juego.Exe -LaunchOptions $Juego.LaunchOptions
+            if ($null -ne $dup) {
+                Registrar "Ya existe un acceso directo igual (entrada $dup). No se ha tocado nada."
+                return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado'; CaratulasOk = $false }
+            }
+        }
+
         $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts -Log $Log
         if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
 
@@ -227,10 +238,18 @@ function Invoke-AnadirJuego {
                 -StartDir $Juego.StartDir -Icono $icono -LaunchOptions $Juego.LaunchOptions `
                 -Reemplazar:$Reemplazar -Log $Log
         if (-not $r.Ok) {
+            # con la comprobacion de arriba no deberia pasar; si pasa, las imagenes recien
+            # copiadas no son de nadie (salvo que el duplicado tenga el mismo appid)
             Registrar "Ya existe un acceso directo igual (entrada $($r.Indice)). No se ha tocado nada."
+            [void](Remove-CaratulasHuerfanas -RutaVdf $Steam.Shortcuts -GridDir $Steam.GridDir -AppId $appId -Log $Log)
             return [pscustomobject]@{ Ok = $false; AppId = $appId; Motivo = 'duplicado'; CaratulasOk = $false }
         }
         $escrito = $true
+
+        # al reemplazar una entrada de otro appid, sus imagenes ya no las usa nadie
+        if ($null -ne $r.AppIdAnterior -and $r.AppIdAnterior -ne $appId) {
+            [void](Remove-CaratulasHuerfanas -RutaVdf $Steam.Shortcuts -GridDir $Steam.GridDir -AppId $r.AppIdAnterior -Log $Log)
+        }
 
         if ($arteOk) {
             Registrar "LISTO. '$Nombre' ya está en la biblioteca."
@@ -243,13 +262,69 @@ function Invoke-AnadirJuego {
         return [pscustomobject]@{ Ok = $true; AppId = $appId; Motivo = ''; CaratulasOk = $arteOk }
     } catch {
         if ($escrito) { Registrar 'El acceso directo ya está escrito, pero algo ha fallado después (ver el error).' }
-        else { Registrar 'Algo ha fallado antes de terminar de escribir.' }
+        else {
+            Registrar 'Algo ha fallado antes de terminar de escribir.'
+            # las imagenes ya copiadas se quedarian sin acceso directo (si al reemplazar sigue
+            # la entrada vieja con el mismo appid, son suyas y no se tocan)
+            [void](Remove-CaratulasHuerfanas -RutaVdf $Steam.Shortcuts -GridDir $Steam.GridDir -AppId $appId -Log $Log)
+        }
         # el aviso de la copia de seguridad, siempre que exista: antes solo salia en una rama
         if ($bak) { Registrar "Si shortcuts.vdf quedara mal, restaura la copia: $bak" }
         throw
     } finally {
         # tras escribir se abre siempre (el usuario querra verlo); si no, solo si estaba abierto
         if (-not $NoReabrirSteam -and ($escrito -or $estabaAbierto)) {
+            Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log
+        }
+    }
+}
+
+# Quita de shortcuts.vdf el acceso directo que corresponde a $Juego (el mismo criterio que la
+# marca 'YA EN STEAM': nombre igual, o exe con las mismas opciones) y sus imagenes de
+# config\grid\. La confirmacion es cosa de quien llama.
+function Invoke-QuitarJuego {
+    param(
+        [Parameter(Mandatory)]$Juego,
+        [Parameter(Mandatory)]$Steam,
+        [switch]$AbrirBigPicture,
+        [switch]$NoReabrirSteam,
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } else { Write-Registro $m } }
+
+    $estabaAbierto = Test-SteamCorriendo
+    if (-not (Stop-SteamYEsperar -SteamExe $Steam.Exe -Log $Log)) {
+        Registrar 'ABORTADO: Steam no se ha cerrado. Ciérralo a mano y repite.'
+        return [pscustomobject]@{ Ok = $false; Motivo = 'steam-abierto' }
+    }
+
+    $bak = $null
+    try {
+        # se busca con Steam ya cerrado: al salir reescribe el fichero y las claves pueden cambiar
+        $existentes = @(Get-ShortcutsExistentes -Ruta $Steam.Shortcuts)
+        $indice = Find-ShortcutDuplicado -Existentes $existentes -Nombre $Juego.Nombre -Exe $Juego.Exe -LaunchOptions $Juego.LaunchOptions
+        if ($null -eq $indice) {
+            Registrar "No hay ningún acceso directo de '$($Juego.Nombre)' en Steam. No se ha tocado nada."
+            return [pscustomobject]@{ Ok = $false; Motivo = 'no-esta' }
+        }
+        $entrada = $existentes | Where-Object { $_.Indice -eq $indice } | Select-Object -First 1
+        Registrar "=== Quitar $($entrada.Nombre) ==="
+
+        $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts -Log $Log
+        if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
+
+        $quitados = @(Remove-SteamShortcut -RutaVdf $Steam.Shortcuts -Indice $indice)
+        foreach ($a in $quitados) {
+            [void](Remove-CaratulasHuerfanas -RutaVdf $Steam.Shortcuts -GridDir $Steam.GridDir -AppId $a -Log $Log)
+        }
+        Registrar "LISTO. '$($entrada.Nombre)' ya no está en la biblioteca."
+        return [pscustomobject]@{ Ok = $true; Motivo = '' }
+    } catch {
+        if ($bak) { Registrar "Si shortcuts.vdf quedara mal, restaura la copia: $bak" }
+        throw
+    } finally {
+        # aqui no se abre si no estaba abierto: al quitar no hay nada nuevo que ir a ver
+        if (-not $NoReabrirSteam -and $estabaAbierto) {
             Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log
         }
     }
@@ -472,6 +547,7 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
       <WrapPanel Margin="0,0,0,12">
         <Button Name="BtnPreparar" Content="1. Preparar carátulas" Background="#FF2E3440"/>
         <Button Name="BtnAnadir" Content="2. Añadir a Steam" IsEnabled="False" Background="#FF7A1418"/>
+        <Button Name="BtnQuitar" Content="Quitar de Steam" IsEnabled="False"/>
       </WrapPanel>
 
       <TextBlock Name="TxtOrigenArte" FontSize="11" Foreground="#FF8A909B" Margin="0,0,0,6"/>
@@ -519,7 +595,7 @@ $win = [Windows.Markup.XamlReader]::Load($reader)
 
 $ctl = @{}
 foreach ($n in @('TxtVersion','TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
-                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','TxtOrigenArte',
+                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','BtnQuitar','TxtOrigenArte',
                  'ImgPortada','ImgCapsula','ImgHero','ChkBigPicture','ChkReemplazar','TxtLog')) {
     $ctl[$n] = $win.FindName($n)
 }
@@ -552,13 +628,18 @@ function Update-Interfaz {
 # lista: es lo unico que el usuario mira mientras espera, y desactivado se lee gris.
 $ControlesInteractivos = @('BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar',
                            'LstJuegos','TxtNombre','TxtOpciones','CmbOrigenArte','BtnPreparar','BtnAnadir',
-                           'ChkBigPicture','ChkReemplazar')
+                           'BtnQuitar','ChkBigPicture','ChkReemplazar')
 
 # Un solo sitio decide que botones estan vivos. Antes lo hacia cada evento por su cuenta y no
 # se puede combinar con Invoke-Ocupado, que al terminar reactiva todo a la vez.
 function Update-Botones {
+    # en plena operacion todo esta desactivado; Invoke-Ocupado lo vuelve a llamar al terminar
+    if ($script:Ocupado) { return }
     $ctl.BtnPreparar.IsEnabled = [bool]$script:Steam
     $ctl.BtnAnadir.IsEnabled   = ([bool]$script:Steam -and $null -ne $script:Preparado)
+    # solo tiene sentido con un juego que ya tenga acceso directo (la marca 'YA EN STEAM')
+    $sel = $ctl.LstJuegos.SelectedItem
+    $ctl.BtnQuitar.IsEnabled   = ([bool]$script:Steam -and $null -ne $sel -and [bool]$sel.YaEnSteam)
 }
 
 # Envoltorio de toda operacion larga lanzada desde un evento. Add-Log llama a Update-Interfaz,
@@ -736,7 +817,8 @@ $ctl.ChkApps.Add_Click({ Invoke-Ocupado { Update-Deteccion } })
 
 $ctl.LstJuegos.Add_SelectionChanged({
     $j = $ctl.LstJuegos.SelectedItem
-    if (-not $j) { return }
+    # sin seleccion (el filtro de busqueda la quita) el boton de quitar se tiene que apagar
+    if (-not $j) { Update-Botones; return }
     # rellenar TxtNombre dispara su TextChanged: sin esta marca avisaria de un cambio de nombre
     # que no ha hecho el usuario, solo por elegir otro juego de la lista
     $script:CambiandoJuego = $true
@@ -829,6 +911,30 @@ function Invoke-Anadir {
     }
 }
 $ctl.BtnAnadir.Add_Click({ Invoke-Ocupado -Boton 'BtnAnadir' -TextoOcupado 'Añadiendo…' -Accion { Invoke-Anadir } })
+
+function Invoke-Quitar {
+    $j = $ctl.LstJuegos.SelectedItem
+    if (-not $j -or -not $j.YaEnSteam) { return }
+    if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
+    # El nombre que sale en la pregunta es el del acceso directo, no el detectado: si se anadio
+    # con otro nombre (casa por el exe), es ese el que el usuario reconoce en su biblioteca.
+    $dup = Test-ShortcutDuplicado -RutaVdf $script:Steam.Shortcuts -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions $j.LaunchOptions
+    $entrada = Get-ShortcutsExistentes -Ruta $script:Steam.Shortcuts | Where-Object { $_.Indice -eq $dup } | Select-Object -First 1
+    $nombre = if ($entrada) { $entrada.Nombre } else { $j.Nombre }
+    $texto = "¿Quitar «$nombre» de la biblioteca de Steam?`r`n`r`n" +
+             "Se borran el acceso directo y sus carátulas. El juego no se desinstala.`r`n" +
+             "Si Steam está abierto se cerrará un momento; antes se hace copia de shortcuts.vdf."
+    $resp = [Windows.MessageBox]::Show($win, $texto, 'Quitar de Steam', 'YesNo', 'Question', 'No')
+    if ($resp -ne 'Yes') { return }
+    try {
+        $r = Invoke-QuitarJuego -Juego $j -Steam $script:Steam -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) -Log $LogGui
+        if ($r.Ok) { Clear-Preview; Update-Deteccion }
+    } catch {
+        Add-Log "ERROR: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'quitar de Steam' -Fallo $_
+    }
+}
+$ctl.BtnQuitar.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitar' -TextoOcupado 'Quitando…' -Accion { Invoke-Quitar } })
 
 # --- arranque --------------------------------------------------------
 $win.Title = "Vaporera Arcade $AppVersion"

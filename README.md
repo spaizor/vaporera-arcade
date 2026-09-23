@@ -52,31 +52,32 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
 
 1. Descarga el proyecto (botón **Code → Download ZIP**) y descomprímelo en una carpeta
    donde tengas permiso de escritura, por ejemplo `Documentos\Vaporera Arcade`.
-2. Haz doble clic en **`Instalar.cmd`**. Desbloquea los ficheros descargados y crea el acceso
-   directo **Vaporera Arcade**, que abre la aplicación sin ventana de consola.
+2. Haz doble clic en **`CrearAccesoDirecto.cmd`**. Desbloquea los ficheros descargados y crea
+   el acceso directo **Vaporera Arcade**, que abre la aplicación sin ventana de consola.
 
    Si prefieres la consola, o quieres el acceso directo en más sitios:
 
    ```powershell
-   powershell -ExecutionPolicy Bypass -File .\Instalar.ps1 -Escritorio -MenuInicio
+   powershell -ExecutionPolicy Bypass -File .\CrearAccesoDirecto.ps1 -Escritorio -MenuInicio
    ```
 
-   Las mismas opciones valen con el `.cmd` (`Instalar.cmd -Escritorio`), y con `-Quitar` se
-   borran los accesos directos creados.
+   Las mismas opciones valen con el `.cmd` (`CrearAccesoDirecto.cmd -Escritorio`), y con
+   `-Quitar` se borran los accesos directos creados.
 
-   > Es `Instalar.cmd` y no `Instalar.ps1` porque **Windows no ejecuta los `.ps1` con doble
+   > Es el `.cmd` y no el `.ps1` porque **Windows no ejecuta los `.ps1` con doble
    > clic**: los abre en un editor. El `.cmd` solo llama al script de al lado.
 
-**Vaporera Arcade es portable: la carpeta que has descomprimido *es* el programa.** El
-instalador no copia nada a ningún otro sitio ni toca el registro de Windows; solo desbloquea
-los ficheros y crea un acceso directo que apunta a esta misma carpeta. Descomprime donde
-quieras tenerlo de forma permanente y **no la borres ni la muevas** después, o el acceso
-directo dejará de funcionar (si la mueves, vuelve a ejecutar el instalador desde la nueva
-ubicación). Lo único que sobra al terminar es el ZIP descargado.
+**Vaporera Arcade es portable: la carpeta que has descomprimido *es* el programa.** No se
+instala nada: el script no copia nada a ningún otro sitio ni toca el registro de Windows;
+solo desbloquea los ficheros y crea un acceso directo que apunta a esta misma carpeta.
+Descomprime donde quieras tenerlo de forma permanente y **no la borres ni la muevas**
+después, o el acceso directo dejará de funcionar (si la mueves, vuelve a ejecutar
+`CrearAccesoDirecto.cmd` desde la nueva ubicación). Lo único que sobra al terminar es el ZIP
+descargado.
 
 > **SmartScreen y antivirus.** Windows marca como peligroso todo lo que se descarga de
 > internet, y un `.ps1` bajado de la red dispara además el aviso de la directiva de ejecución.
-> Por eso el instalador se lanza con `-ExecutionPolicy Bypass` y lo primero que hace es
+> Por eso el script se lanza con `-ExecutionPolicy Bypass` y lo primero que hace es
 > `Unblock-File` sobre los ficheros de la carpeta. Si tu antivirus protesta, es por el mismo
 > motivo: un script que no está firmado. Puedes leer los scripts antes de ejecutarlos, que para
 > eso el código está a la vista.
@@ -88,7 +89,7 @@ ubicación). Lo único que sobra al terminar es el ZIP descargado.
 
 ### Con ventana
 
-Haz doble clic en el acceso directo **Vaporera Arcade** que creó el instalador. Abre la
+Haz doble clic en el acceso directo **Vaporera Arcade** que creó `CrearAccesoDirecto.cmd`. Abre la
 aplicación sin mostrar la consola. También puedes ejecutar el script a mano:
 
 ```powershell
@@ -100,6 +101,8 @@ powershell -ExecutionPolicy Bypass -STA -File .\VaporeraArcade.ps1
 3. Pulsa **1. Preparar carátulas** y revisa la vista previa.
 4. Pulsa **2. Añadir a Steam**. La aplicación cierra Steam, añade el juego, copia las imágenes
    y vuelve a abrir Steam.
+
+Para deshacerlo, **Quitar de Steam** (ver *Quitar un juego*).
 
 Casillas de la parte inferior:
 
@@ -218,35 +221,44 @@ el origen de las carátulas en **Solo imágenes del propio juego** no se conecta
 **Desinstalar del todo:**
 
 1. Borra la carpeta de la aplicación. Si creaste accesos directos en el Escritorio o en el
-   menú Inicio, quítalos antes con `Instalar.cmd -Quitar -Escritorio -MenuInicio`.
+   menú Inicio, quítalos antes con `CrearAccesoDirecto.cmd -Quitar -Escritorio -MenuInicio`.
 2. Borra `%LOCALAPPDATA%\VaporeraArcade` (ajustes, clave y registro).
 3. Borra `%TEMP%\VaporeraArcade` (imágenes temporales).
-4. Si además quieres deshacer lo hecho en Steam, quita los juegos añadidos (ver *Quitar un
-   juego*) y borra los `shortcuts.vdf.bak-*` de la carpeta `config` de tu perfil de Steam.
+4. Si además quieres deshacer lo hecho en Steam, quita los juegos añadidos antes de borrar la
+   aplicación (ver *Quitar un juego*) y borra los `shortcuts.vdf.bak-*` de la carpeta `config`
+   de tu perfil de Steam.
 
 ## Quitar un juego
 
-Por ahora no hay botón para quitar juegos. Puedes quitarlo desde Steam (clic derecho sobre el
-juego → *Administrar* y la opción para quitarlo de la biblioteca) o, con Steam cerrado, desde
-PowerShell en la carpeta de la aplicación:
+Elige en la lista un juego marcado como **YA EN STEAM** y pulsa **Quitar de Steam**. Tras
+confirmar, la aplicación cierra Steam, hace una copia de seguridad de `shortcuts.vdf`, quita el
+acceso directo y borra sus carátulas de `config\grid\`. El juego no se desinstala. Steam se
+vuelve a abrir solo si estaba abierto.
+
+También puedes quitarlo desde Steam (clic derecho sobre el juego → *Administrar* y la opción
+para quitarlo de la biblioteca), pero entonces sus carátulas se quedan en `config\grid\`. O,
+con Steam cerrado, desde PowerShell en la carpeta de la aplicación:
 
 ```powershell
 . .\lib\Vdf.ps1
 . .\lib\SteamCtl.ps1
 $s = Get-SteamInfo
 Backup-Shortcuts -Ruta $s.Shortcuts
-Remove-SteamShortcut -RutaVdf $s.Shortcuts -Nombre 'Nombre exacto del juego'
+foreach ($id in Remove-SteamShortcut -RutaVdf $s.Shortcuts -Nombre 'Nombre exacto del juego') {
+    Remove-CaratulasHuerfanas -RutaVdf $s.Shortcuts -GridDir $s.GridDir -AppId $id
+}
 ```
 
-Las imágenes de `config\grid\` no se borran solas. Puedes eliminarlas a mano.
+Al reemplazar un acceso directo con otro nombre o ejecutable, las carátulas del anterior
+también se borran.
 
 ## Cómo funciona por dentro
 
 ```
 Vaporera Arcade
 ├── VaporeraArcade.ps1           aplicación: ventana WPF y modo consola
-├── Instalar.cmd                 lanzador del instalador (doble clic)
-├── Instalar.ps1                 desbloquea los ficheros y crea el acceso directo
+├── CrearAccesoDirecto.cmd       lanzador del script de al lado (doble clic)
+├── CrearAccesoDirecto.ps1       desbloquea los ficheros y crea el acceso directo
 └── lib
     ├── Config.ps1               ajustes del usuario (config.json en %LOCALAPPDATA%)
     ├── Vdf.ps1                  lectura y escritura del formato VDF binario y cálculo del appid

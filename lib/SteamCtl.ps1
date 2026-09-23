@@ -268,10 +268,17 @@ function Add-SteamShortcut {
     if (-not $root['shortcuts']) { $root['shortcuts'] = [ordered]@{} }
     $sc = $root['shortcuts']
 
-    $existente = Find-ShortcutDuplicado -Existentes (ConvertTo-ShortcutInfo -Shortcuts $sc) `
-                    -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions
+    $info = @(ConvertTo-ShortcutInfo -Shortcuts $sc)
+    $existente = Find-ShortcutDuplicado -Existentes $info -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions
+    # El appid de la entrada con la que choca. Al reemplazar puede no ser el nuevo (casa por
+    # nombre con otro exe, o por exe con otro nombre) y entonces sus imagenes de config\grid\
+    # se quedan huerfanas: quien llama las limpia con Remove-CaratulasHuerfanas.
+    $appIdAnterior = $null
+    if ($existente -ne $null) {
+        $appIdAnterior = ($info | Where-Object { $_.Indice -eq $existente } | Select-Object -First 1).AppId
+    }
     if ($existente -ne $null -and -not $Reemplazar) {
-        return [pscustomobject]@{ Ok = $false; Motivo = 'duplicado'; Indice = $existente; AppId = $appId }
+        return [pscustomobject]@{ Ok = $false; Motivo = 'duplicado'; Indice = $existente; AppId = $appId; AppIdAnterior = $appIdAnterior }
     }
 
     $entrada = New-EntradaShortcut -AppId $appId -Nombre $Nombre -Exe $Exe -StartDir $StartDir -Icono $Icono -LaunchOptions $LaunchOptions
@@ -287,21 +294,71 @@ function Add-SteamShortcut {
     }
 
     Write-BinaryVdf -Root $root -Path $RutaVdf
-    return [pscustomobject]@{ Ok = $true; Motivo = ''; Indice = $existente; AppId = $appId }
+    return [pscustomobject]@{ Ok = $true; Motivo = ''; Indice = $existente; AppId = $appId; AppIdAnterior = $appIdAnterior }
 }
 
+# Quita las entradas con ese nombre, o la de esa clave (-Indice, la que devuelve
+# Find-ShortcutDuplicado). Steam DEBE estar cerrado. Devuelve los appid quitados (vacio si no
+# habia ninguna), para poder limpiar despues sus imagenes con Remove-CaratulasHuerfanas.
+# Las claves se renumeran 0..n-1, como las deja Steam.
 function Remove-SteamShortcut {
-    param([Parameter(Mandatory)][string]$RutaVdf, [Parameter(Mandatory)][string]$Nombre)
-    if (-not (Test-Path -LiteralPath $RutaVdf)) { return $false }
+    param([Parameter(Mandatory)][string]$RutaVdf, [string]$Nombre = '', [string]$Indice = '')
+    if (-not $Nombre -and -not $Indice) { throw 'Remove-SteamShortcut necesita -Nombre o -Indice.' }
+    $quitados = @()
+    if (-not (Test-Path -LiteralPath $RutaVdf)) { return $quitados }
     $root = Read-BinaryVdf -Path $RutaVdf
     $sc = $root['shortcuts']
-    if (-not $sc) { return $false }
+    if (-not $sc) { return $quitados }
     $nuevo = [ordered]@{}
-    $i = 0; $borrado = $false
+    $i = 0
     foreach ($k in @($sc.Keys)) {
-        if (([string]$sc[$k]['AppName']) -eq $Nombre) { $borrado = $true; continue }
+        $sobra = if ($Indice) { ([string]$k) -eq $Indice } else { ([string]$sc[$k]['AppName']) -eq $Nombre }
+        if ($sobra) {
+            $quitados += [uint32][System.BitConverter]::ToUInt32([System.BitConverter]::GetBytes([int]$sc[$k]['appid']), 0)
+            continue
+        }
         $nuevo["$i"] = $sc[$k]; $i++
     }
-    if ($borrado) { $root['shortcuts'] = $nuevo; Write-BinaryVdf -Root $root -Path $RutaVdf }
-    return $borrado
+    if ($quitados.Count) { $root['shortcuts'] = $nuevo; Write-BinaryVdf -Root $root -Path $RutaVdf }
+    return $quitados
+}
+
+# Borra de config\grid\ las imagenes de un appid que ya no usa ninguna entrada de
+# shortcuts.vdf: las de un juego quitado, las del appid viejo al reemplazar o las copiadas
+# para un acceso directo que al final no se escribio.
+# Solo borra si ha podido leer el VDF y el appid no esta en el: si una entrada lo sigue usando,
+# las imagenes son suyas. Los appid de los accesos directos llevan el bit alto puesto y los de
+# los juegos de Steam no, asi que no se pueden llevar por delante las de un juego de la tienda.
+# No lanza nunca (se llama desde los catch). Devuelve cuantos ficheros ha borrado.
+function Remove-CaratulasHuerfanas {
+    param(
+        [Parameter(Mandatory)][string]$RutaVdf,
+        [Parameter(Mandatory)][string]$GridDir,
+        [uint32]$AppId = 0,
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
+    if ($AppId -eq 0 -or -not (Test-Path -LiteralPath $GridDir)) { return 0 }
+    try {
+        $enUso = @(Get-ShortcutsExistentes -Ruta $RutaVdf | Where-Object { $_.AppId -eq $AppId })
+        if ($enUso.Count) { return 0 }
+    } catch {
+        Registrar "No he podido leer shortcuts.vdf para limpiar las imágenes de $AppId; las dejo."
+        return 0
+    }
+    # lo que genera esta aplicacion y lo que puede poner el propio Steam al cambiar una imagen
+    # a mano (tambien en .jpg), mas el .json con la posicion del logo
+    $nombres = @("${AppId}.json")
+    foreach ($suf in @('', 'p', '_hero', '_logo', '_icon')) {
+        foreach ($ext in @('png', 'jpg', 'jpeg')) { $nombres += "${AppId}${suf}.$ext" }
+    }
+    $n = 0
+    foreach ($f in $nombres) {
+        $ruta = Join-Path $GridDir $f
+        if (-not (Test-Path -LiteralPath $ruta)) { continue }
+        try { Remove-Item -LiteralPath $ruta -Force -ErrorAction Stop; $n++ }
+        catch { Registrar "  no he podido borrar $f : $($_.Exception.Message)" }
+    }
+    if ($n) { Registrar "Borradas $n imágenes que ya no usaba ningún acceso directo (appid $AppId)." }
+    return $n
 }

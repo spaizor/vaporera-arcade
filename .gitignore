@@ -7,7 +7,7 @@ sgdb.key
 # Copias de seguridad de shortcuts.vdf
 *.bak-*
 
-# Acceso directo que crea Instalar.ps1 (lleva la ruta de cada PC)
+# Acceso directo que crea CrearAccesoDirecto.ps1 (lleva la ruta de cada PC)
 *.lnk
 
 # Notas locales para Claude Code

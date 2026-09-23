@@ -1,14 +1,16 @@
 ﻿# =====================================================================
-#  Instalar.ps1 - Crea el acceso directo de Vaporera Arcade
+#  CrearAccesoDirecto.ps1 - Crea el acceso directo de Vaporera Arcade
 #
 #  No instala nada en otro sitio: la aplicacion vive en esta misma
 #  carpeta y el acceso directo apunta aqui. Es un programa portable.
+#  (Hasta la 0.6 se llamaba Instalar.ps1, y el nombre hacia pensar
+#  justo lo contrario.)
 #
 #  Sustituye al antiguo lanzador .vbs: Windows 11 esta retirando el
 #  motor de VBScript, asi que el acceso directo lo crea este script y
 #  apunta a powershell.exe con la ventana oculta.
 #
-#  Uso:  powershell -ExecutionPolicy Bypass -File .\Instalar.ps1
+#  Uso:  powershell -ExecutionPolicy Bypass -File .\CrearAccesoDirecto.ps1
 #        ... -Escritorio -MenuInicio    tambien en esos sitios
 #        ... -Quitar                    borra los accesos directos
 # =====================================================================
@@ -55,7 +57,7 @@ function Get-Ubicaciones {
 
 if (-not (Test-Path -LiteralPath $Destino)) {
     Write-Host "No encuentro VaporeraArcade.ps1 junto a este script." -ForegroundColor Red
-    Write-Host "Deja Instalar.ps1 en la misma carpeta que la aplicación."
+    Write-Host "Deja CrearAccesoDirecto.ps1 en la misma carpeta que la aplicación."
     exit 1
 }
 
@@ -83,7 +85,7 @@ if ($Quitar) {
 }
 
 # ---------------------------------------------------------------------
-#  Instalar
+#  Crear
 # ---------------------------------------------------------------------
 $exe = Get-PowerShellExe
 if (-not $exe) {
@@ -143,7 +145,7 @@ if ($creados -gt 0) {
     Write-Host "La aplicación se queda en esta carpeta:"
     Write-Host "  $Raiz"
     Write-Host "No la borres ni la muevas, o el acceso directo dejará de funcionar. Si la"
-    Write-Host "mueves, vuelve a ejecutar este instalador desde su nueva ubicación."
+    Write-Host "mueves, vuelve a ejecutar CrearAccesoDirecto desde su nueva ubicación."
 } else {
     exit 1
 }
