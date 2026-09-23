@@ -284,6 +284,12 @@ junto al nombre en la cabecera de la ventana.
 
 ## Historial de versiones
 
+- **0.7** (23-09-2026): botón «Quitar de Steam», que borra el acceso directo y sus
+  carátulas; las carátulas ya no se quedan huérfanas al reemplazar un juego ni cuando el
+  acceso directo no llega a escribirse. `Instalar.cmd` pasa a llamarse
+  `CrearAccesoDirecto.cmd`, porque la aplicación es portable y no se instala nada.
+  Además, la carpeta temporal se limpia sola, se corrigen pequeñas fugas de recursos
+  gráficos y el ZIP ya no incluye ficheros de git.
 - **0.6** (22-09-2026): detección más robusta en equipos distintos al de desarrollo. Los
   juegos de Xbox se buscan en la carpeta real (`.GamingRoot`) y solo en unidades fijas; Epic
   se lanza por la URI del lanzador; GOG respeta los argumentos y la carpeta de inicio del
