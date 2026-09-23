@@ -936,7 +936,25 @@ function Invoke-Quitar {
 }
 $ctl.BtnQuitar.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitar' -TextoOcupado 'Quitando…' -Accion { Invoke-Quitar } })
 
+# "Preparar caratulas" deja cada juego en %TEMP%\VaporeraArcade\<appid>\ (~1,6 MB) y solo se
+# borraba al volver a preparar el mismo appid: lo preparado y no anadido, o lo de un nombre que
+# luego se cambio, se quedaba ahi para siempre. Lo preparado no sobrevive a la sesion, pero no
+# se borra todo: con dos ventanas abiertas, la segunda se llevaria lo que acaba de preparar la
+# primera. Solo carpetas con nombre de appid, por si alguien deja algo mas ahi.
+function Remove-TempViejo {
+    param([int]$Horas = 24)
+    if (-not (Test-Path -LiteralPath $TempDir)) { return }
+    $limite = (Get-Date).AddHours(-$Horas)
+    $n = 0
+    foreach ($d in @(Get-ChildItem -LiteralPath $TempDir -Directory -ErrorAction SilentlyContinue)) {
+        if ($d.Name -notmatch '^\d+$' -or $d.LastWriteTime -gt $limite) { continue }
+        try { Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction Stop; $n++ } catch { }
+    }
+    if ($n) { Write-Registro "Borradas $n carpetas de carátulas preparadas hace más de $Horas horas en $TempDir." }
+}
+
 # --- arranque --------------------------------------------------------
+Remove-TempViejo
 $win.Title = "Vaporera Arcade $AppVersion"
 $ctl.TxtVersion.Text = "v$AppVersion"
 if ($script:Steam) {

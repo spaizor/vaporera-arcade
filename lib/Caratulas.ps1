@@ -289,13 +289,16 @@ function Get-SgdbImagenes {
 function Get-BitmapDesdeUrl {
     param([Parameter(Mandatory)][string]$Url)
     Initialize-Tls
+    $wc = $null
     try {
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent','Mozilla/5.0')
         $bytes = $wc.DownloadData($Url)
+        # el MemoryStream NO se libera: el bitmap lo necesita vivo mientras exista
         $ms = New-Object System.IO.MemoryStream(,$bytes)
         return [System.Drawing.Bitmap]::FromStream($ms)
     } catch { return $null }
+    finally { if ($wc) { $wc.Dispose() } }
 }
 
 function Get-BitmapDesdeArchivo {
@@ -303,8 +306,9 @@ function Get-BitmapDesdeArchivo {
     try {
         if ($Ruta -match '\.exe$') {
             $ico = [System.Drawing.Icon]::ExtractAssociatedIcon($Ruta)
-            if ($ico) { return $ico.ToBitmap() }
-            return $null
+            if (-not $ico) { return $null }
+            # ToBitmap hace una copia: el Icon (un HICON de GDI) se puede soltar ya
+            try { return $ico.ToBitmap() } finally { $ico.Dispose() }
         }
         $bytes = [System.IO.File]::ReadAllBytes($Ruta)
         $ms = New-Object System.IO.MemoryStream(,$bytes)

@@ -214,7 +214,7 @@ el origen de las carátulas en **Solo imágenes del propio juego** no se conecta
   en una incidencia de GitHub o de enviárselo a nadie. Crece sin límite: puedes borrarlo cuando
   quieras y se vuelve a crear.
 - `%TEMP%\VaporeraArcade\<appid>\`: las imágenes a medio preparar de cada juego (~1,6 MB por
-  juego). No se borran solas.
+  juego). Al abrir la aplicación se borran las que tengan más de un día.
 - En la carpeta de Steam: el acceso directo en `shortcuts.vdf`, sus copias de seguridad
   `shortcuts.vdf.bak-<fecha>` y las imágenes de `userdata\<usuario>\config\grid\`.
 
