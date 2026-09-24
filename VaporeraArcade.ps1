@@ -372,6 +372,16 @@ if ($Consola) {
 # =====================================================================
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
 
+# El de la ventana, la de Ajustes y la barra de tareas; sin el sale el de PowerShell. Si falta
+# o no se puede leer se queda ese: no es motivo para no arrancar. Del .ico WPF coge solo el
+# tamano que necesita en cada sitio. Lo genera docs\CrearIcono.ps1.
+$script:IconoVentana = $null
+$icoApp = Join-Path $Raiz 'docs\VaporeraArcade.ico'
+if (Test-Path -LiteralPath $icoApp) {
+    try { $script:IconoVentana = [Windows.Media.Imaging.BitmapFrame]::Create((New-Object Uri($icoApp))) }
+    catch { Write-Registro "No he podido cargar el icono de la ventana: $($_.Exception.Message)" }
+}
+
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -776,6 +786,7 @@ function Show-Ajustes {
 '@
     $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xamlAjustes))
     $dlg.Owner = $win
+    if ($script:IconoVentana) { $dlg.Icon = $script:IconoVentana }
     $txtClave  = $dlg.FindName('TxtClave')
     $txtEstado = $dlg.FindName('TxtEstado')
     $brocha    = New-Object Windows.Media.BrushConverter
@@ -956,6 +967,7 @@ function Remove-TempViejo {
 # --- arranque --------------------------------------------------------
 Remove-TempViejo
 $win.Title = "Vaporera Arcade $AppVersion"
+if ($script:IconoVentana) { $win.Icon = $script:IconoVentana }
 $ctl.TxtVersion.Text = "v$AppVersion"
 if ($script:Steam) {
     $ctl.TxtSteam.Text = "Perfil $($script:Steam.UserId)  ~  $($script:Steam.Shortcuts)"

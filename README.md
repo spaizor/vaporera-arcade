@@ -134,14 +134,15 @@ Por orden de preferencia:
    pulsa **Ajustes…** en la aplicación, pégala y usa **Probar** para comprobar que funciona.
    Se guarda en `%LOCALAPPDATA%\VaporeraArcade\config.json`, fuera de la carpeta de la aplicación.
 3. **Imágenes del propio juego.** Si no hay nada más, compone las carátulas con el fondo y el
-   logo que trae el juego instalado.
+   logo que trae el juego instalado. En las apps de la Store usa el icono de la propia app, el
+   mismo que enseña Windows en el menú Inicio.
 
 Cuando se busca por el nombre, se compara el título de cada resultado con el del juego y se
 descarta el que no cuadre, en vez de quedarse con el primero: buscar el ejecutable `obs64` no
 trae la carátula de otro programa, y buscar `Forza Horizon 5` no devuelve la de `Forza
 Horizon 6`. Lo descartado queda anotado en el registro. El precio es que un juego cuyo nombre
-detectado no se parece al real (los de Ubisoft salen como `ACValhalla`) se queda con las
-imágenes que trae instaladas.
+detectado no se parece al real (un programa reciente sale con el nombre de su ejecutable) se
+queda con las imágenes que trae instaladas.
 
 Con el desplegable **Origen de las carátulas** puedes forzar de dónde salen:
 
@@ -259,6 +260,9 @@ Vaporera Arcade
 ├── VaporeraArcade.ps1           aplicación: ventana WPF y modo consola
 ├── CrearAccesoDirecto.cmd       lanzador del script de al lado (doble clic)
 ├── CrearAccesoDirecto.ps1       desbloquea los ficheros y crea el acceso directo
+├── docs
+│   ├── VaporeraArcade.ico       icono del acceso directo y de la ventana
+│   └── captura.png              la captura de este README
 └── lib
     ├── Config.ps1               ajustes del usuario (config.json en %LOCALAPPDATA%)
     ├── Vdf.ps1                  lectura y escritura del formato VDF binario y cálculo del appid
@@ -281,6 +285,21 @@ junto al nombre en la cabecera de la ventana.
 - **El appid** de un acceso directo es `CRC32(exe_entre_comillas + nombre) | 0x80000000`, el
   mismo cálculo que hace Steam. Por eso las carátulas se asocian al juego correcto.
 - Las entradas nuevas tienen la misma estructura que las que crea Steam.
+
+### Tests
+
+El repositorio tiene una carpeta `tests\` (no va en el ZIP de las releases) con tests de
+[Pester 5](https://pester.dev) para lo delicado: la lectura y escritura de `shortcuts.vdf`
+byte a byte, el cálculo del appid, los duplicados, añadir y quitar accesos directos, la
+limpieza de carátulas y la comparación de títulos. No tocan Steam: trabajan sobre ficheros
+temporales. Se lanzan desde Windows PowerShell 5.1, en la carpeta del repositorio:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-Tests.ps1 -Detalle
+```
+
+Windows solo trae Pester 3.4, que no sirve: la cabecera de `Invoke-Tests.ps1` explica cómo
+instalar la versión 5.
 
 ## Historial de versiones
 

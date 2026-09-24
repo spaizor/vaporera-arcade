@@ -126,6 +126,26 @@ function Get-JuegosXbox {
 # ---------------------------------------------------------------------
 #  Ubisoft Connect  ->  UbisoftConnect.exe + uplay://launch/<id>/0
 # ---------------------------------------------------------------------
+# El nombre de verdad no esta en la clave de Ubisoft (solo guarda InstallDir e idioma) sino en
+# la de desinstalacion que crea el lanzador, "Uplay Install <id>" (comprobado con Rayman
+# Origins). La carpeta no sirve: hay juegos que se instalan en "ACValhalla" y similares.
+# Se quitan los simbolos de marca, que algunos titulos traen (Rainbow Six(R) Siege) y en la
+# biblioteca de Steam quedan feos. $Bases solo se cambia para probar.
+function Get-NombreUbisoft {
+    param(
+        [string]$Id,
+        [string[]]$Bases = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+                             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')
+    )
+    foreach ($base in $Bases) {
+        $p = Get-ItemProperty -LiteralPath (Join-Path $base "Uplay Install $Id") -ErrorAction SilentlyContinue
+        if (-not $p -or -not $p.DisplayName) { continue }
+        $nom = ($p.DisplayName -replace '[\u2122\u00AE\u00A9]', '' -replace '\s{2,}', ' ').Trim()
+        if ($nom) { return $nom }
+    }
+    return $null
+}
+
 function Get-JuegosUbisoft {
     $res = @()
     $lk = 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft\Launcher'
@@ -147,7 +167,9 @@ function Get-JuegosUbisoft {
         # TODOS los origenes: el usuario ve la lista vacia.
         $info = Get-Item -LiteralPath $dir -ErrorAction SilentlyContinue
         if (-not $info) { continue }
-        $nombre = Split-Path $dir.TrimEnd('\') -Leaf
+        # si no hay clave de desinstalacion, la carpeta, como antes
+        $nombre = Get-NombreUbisoft -Id $id
+        if (-not $nombre) { $nombre = Split-Path $dir.TrimEnd('\') -Leaf }
         # El exe solo se usa para sacar el icono. Con -Recurse a pelo esto recorre el juego
         # entero: en uno de 100 GB tarda minutos y congela la ventana. Dos niveles bastan
         # (el ejecutable esta en la raiz o en bin\, Binaries\...) y se descartan los
@@ -279,11 +301,93 @@ function Get-JuegosGog {
 # ---------------------------------------------------------------------
 #  Apps de la Store (UWP): sin .exe, van por explorer.exe + AUMID
 # ---------------------------------------------------------------------
+# Ancho de un PNG leyendo solo la cabecera (IHDR, bytes 16-19, big-endian), sin cargar la
+# imagen: se miran decenas por app y System.Drawing no esta cargado en esta lib.
+function Get-AnchoPng {
+    param([string]$Ruta)
+    $fs = $null
+    try {
+        $fs = [IO.File]::OpenRead($Ruta)
+        $b = New-Object byte[] 24
+        if ($fs.Read($b, 0, 24) -lt 24) { return 0 }
+        if ($b[1] -ne 0x50 -or $b[2] -ne 0x4E -or $b[3] -ne 0x47) { return 0 }   # 'PNG'
+        return (([int]$b[16] -shl 24) -bor ([int]$b[17] -shl 16) -bor ([int]$b[18] -shl 8) -bor [int]$b[19])
+    } catch { return 0 }
+    finally { if ($fs) { $fs.Dispose() } }
+}
+
+# Los ficheros de un logo del manifiesto: el manifiesto dice 'Assets\Logo.png' pero en disco
+# estan 'Logo.scale-200.png', 'Logo.targetsize-256_altform-unplated.png'... (calificadores
+# en cualquier orden) y a veces tambien el fichero tal cual. Fuera las variantes de alto
+# contraste y las 'lightunplated', que son para fondo claro (negras sobre transparente).
+function Get-VariantesLogo {
+    param([string]$Carpeta, [string]$Relativa)
+    if (-not $Relativa) { return @() }
+    $ruta = Join-Path $Carpeta $Relativa
+    $dir  = Split-Path $ruta -Parent
+    $base = [IO.Path]::GetFileNameWithoutExtension($ruta)
+    # GetFiles con el comodin y un foreach, no Get-ChildItem y el pipeline: con Get-ChildItem
+    # la lista de apps tardaba un segundo mas (medido), y se repite al refrescar
+    $res = @()
+    try { $ficheros = [IO.Directory]::GetFiles($dir, $base + '*.png') } catch { return $res }
+    $patron = '^' + [regex]::Escape($base) + '(\.[^\\]+)?\.png$'
+    foreach ($f in $ficheros) {
+        $n = [IO.Path]::GetFileName($f)
+        if ($n -notmatch $patron -or $n -match 'contrast-|lightunplated') { continue }
+        $res += [pscustomobject]@{ Ruta = $f; Ancho = (Get-AnchoPng $f); SinPlaca = [bool]($n -match 'altform-unplated') }
+    }
+    return $res
+}
+
+# El mejor logo de una app de la Store, para que las caratulas tengan algo propio cuando la
+# busqueda en el catalogo falla (si no, solo el nombre sobre fondo oscuro).
+# Primero el de la lista de apps (Square44x44Logo): es el icono que ensena Windows, sin margen
+# y con la variante 'unplated' transparente. Pero en algunas apps solo esta a 44-88 px (Claude,
+# Wolfenstein), y entonces vale mas la baldosa mas grande, aunque lleve margen.
+# $Aumid es lo que va detras de 'shell:AppsFolder\': <familia del paquete>!<id de la app>.
+# No lanza: si algo falla, devuelve '' y la caratula sale como antes.
+function Get-LogoAppStore {
+    param([string]$Aumid)
+    try {
+        $familia, $AppId = $Aumid -split '!', 2
+        if (-not $AppId) { return '' }
+        # la familia es <nombre>_<id del editor>, y el nombre no puede llevar '_'
+        $nombrePaquete = $familia -replace '_[^_]*$', ''
+        $paquete = Get-AppxPackage -Name $nombrePaquete -ErrorAction Stop |
+                   Where-Object { $_.PackageFamilyName -eq $familia } | Select-Object -First 1
+        if (-not $paquete -or -not $paquete.InstallLocation) { return '' }
+        $Carpeta = $paquete.InstallLocation
+        $man = Join-Path $Carpeta 'AppxManifest.xml'
+        if (-not (Test-Path -LiteralPath $man)) { return '' }
+        [xml]$x = Get-Content -LiteralPath $man -Raw -Encoding UTF8
+        $app = @($x.Package.Applications.Application) | Where-Object { $_.Id -eq $AppId } | Select-Object -First 1
+        if (-not $app -or -not $app.VisualElements) { return '' }
+        $ve = $app.VisualElements
+
+        $lista = @(Get-VariantesLogo $Carpeta $ve.Square44x44Logo | Where-Object { $_.Ancho -gt 0 } |
+                   Sort-Object @{ Expression = 'Ancho'; Descending = $true }, @{ Expression = 'SinPlaca'; Descending = $true })
+        if ($lista.Count -and $lista[0].Ancho -ge 128) { return $lista[0].Ruta }
+
+        $todas = @($lista)
+        $tile = $null
+        if ($ve.DefaultTile) { $tile = $ve.DefaultTile.Square310x310Logo }
+        foreach ($rel in @($ve.Square150x150Logo, $tile, $x.Package.Properties.Logo)) {
+            $todas += @(Get-VariantesLogo $Carpeta $rel | Where-Object { $_.Ancho -gt 0 })
+        }
+        $mejor = $todas | Sort-Object Ancho -Descending | Select-Object -First 1
+        if ($mejor) { return $mejor.Ruta }
+    } catch { }
+    return ''
+}
+
 function Get-AppsStore {
     $res = @()
     foreach ($a in (Get-StartApps -ErrorAction SilentlyContinue)) {
         if ($a.AppID -notmatch '!') { continue }          # solo AUMID de paquete
         if ($a.AppID -match '^Microsoft\.(Windows|BingWeather|ScreenSketch|MicrosoftEdge|Todos|People|Getstarted|WindowsStore|549981)') { continue }
+        # Sin Icono a proposito: el logo del paquete lo busca New-CaratulasSteam al preparar
+        # (Get-LogoAppStore). Buscarlo aqui para todas costaba medio segundo mas de ventana
+        # parada en cada refresco (medido), para usar solo el de la app que se prepare.
         $res += New-Juego -Nombre $a.Name -Fuente 'App de la Store' `
                 -Exe (Join-Path $env:SystemRoot 'explorer.exe') -StartDir ($env:SystemRoot + '\') `
                 -LaunchOptions ('shell:AppsFolder\' + $a.AppID) `

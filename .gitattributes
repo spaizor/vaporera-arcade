@@ -12,3 +12,5 @@
 # Fuera del ZIP de las releases (git archive): a quien lo descarga no le sirven de nada
 .gitattributes export-ignore
 .gitignore     export-ignore
+/tests         export-ignore
+/docs/CrearIcono.ps1 export-ignore

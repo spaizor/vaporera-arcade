@@ -517,7 +517,18 @@ function New-CaratulasSteam {
     }
 
     # 3) Assets locales
-    $loc = Get-AssetsLocales -Carpeta $Juego.Carpeta -Icono $Juego.Icono
+    # Las apps de la Store no traen Icono de la deteccion: su logo se busca aqui, en el paquete
+    # instalado, y solo para la que se prepara. Sin el, si el catalogo no la encuentra, la
+    # caratula es el nombre sobre fondo oscuro. Get-LogoAppStore vive en Fuentes.ps1: esta lib
+    # se puede cargar suelta, de ahi el Get-Command.
+    $iconoLocal = $Juego.Icono
+    $prefijoApp = 'shell:AppsFolder\'
+    if (-not $iconoLocal -and $Juego.LaunchOptions -and $Juego.LaunchOptions.StartsWith($prefijoApp) -and
+        (Get-Command Get-LogoAppStore -ErrorAction SilentlyContinue)) {
+        $iconoLocal = Get-LogoAppStore -Aumid $Juego.LaunchOptions.Substring($prefijoApp.Length)
+        if ($iconoLocal) { Registrar "  logo de la app: $(Split-Path $iconoLocal -Leaf)" }
+    }
+    $loc = Get-AssetsLocales -Carpeta $Juego.Carpeta -Icono $iconoLocal
     $logoDelExe = $false
     if (-not $logo) { $logo = $loc.Logo; $logoDelExe = [bool]$loc.LogoDelExe }
     $fondoLocal = $loc.Fondo
