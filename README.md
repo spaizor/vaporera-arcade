@@ -303,6 +303,10 @@ instalar la versión 5.
 
 ## Historial de versiones
 
+- **0.8** (24-09-2026): icono propio en el acceso directo, la ventana y la barra de tareas.
+  Los juegos de Ubisoft toman su nombre del registro de Windows en lugar del nombre de la
+  carpeta, y las apps de la Store usan su propio icono en las carátulas cuando el catálogo no
+  las encuentra. Además, pruebas automáticas (Pester) de las partes más delicadas.
 - **0.7** (23-09-2026): botón «Quitar de Steam», que borra el acceso directo y sus
   carátulas; las carátulas ya no se quedan huérfanas al reemplazar un juego ni cuando el
   acceso directo no llega a escribirse. `Instalar.cmd` pasa a llamarse
