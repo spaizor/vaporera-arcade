@@ -146,6 +146,24 @@ function Get-NombreUbisoft {
     return $null
 }
 
+# La misma clave trae en DisplayIcon un .ico que el lanzador deja en data\ (con 256x256 en el
+# caso de Rayman Origins), mejor que el 32x32 que sale del exe. Viene con '/' y puede traer
+# comillas y el ',<indice>' de los iconos dentro de un exe. $Bases solo se cambia para probar.
+function Get-IconoUbisoft {
+    param(
+        [string]$Id,
+        [string[]]$Bases = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+                             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')
+    )
+    foreach ($base in $Bases) {
+        $p = Get-ItemProperty -LiteralPath (Join-Path $base "Uplay Install $Id") -ErrorAction SilentlyContinue
+        if (-not $p -or -not $p.DisplayIcon) { continue }
+        $ruta = ($p.DisplayIcon.Trim() -replace ',\s*-?\d+$', '').Trim().Trim('"') -replace '/', '\'
+        if ($ruta -match '\.(ico|exe)$' -and (Test-Path -LiteralPath $ruta -PathType Leaf)) { return $ruta }
+    }
+    return $null
+}
+
 function Get-JuegosUbisoft {
     $res = @()
     $lk = 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft\Launcher'
@@ -170,15 +188,19 @@ function Get-JuegosUbisoft {
         # si no hay clave de desinstalacion, la carpeta, como antes
         $nombre = Get-NombreUbisoft -Id $id
         if (-not $nombre) { $nombre = Split-Path $dir.TrimEnd('\') -Leaf }
-        # El exe solo se usa para sacar el icono. Con -Recurse a pelo esto recorre el juego
-        # entero: en uno de 100 GB tarda minutos y congela la ventana. Dos niveles bastan
-        # (el ejecutable esta en la raiz o en bin\, Binaries\...) y se descartan los
-        # instaladores y utilidades, que si no ganan por tamano en algunos juegos.
-        $icono = ''
-        $exeGrande = Get-ChildItem -LiteralPath $dir -Filter *.exe -Recurse -Depth 2 -File -ErrorAction SilentlyContinue |
-                     Where-Object { $_.Name -notmatch '^(unins|setup|install|vcredist|vc_redist|dxsetup|dotnet|oalinst|UbisoftGameLauncher|UplayCrashReporter|.*[Cc]rash.*)' } |
-                     Sort-Object Length -Descending | Select-Object -First 1
-        if ($exeGrande) { $icono = $exeGrande.FullName }
+        # El icono, del .ico del registro. Si no lo hay, del exe mas grande del juego, que
+        # solo se usa para eso. Con -Recurse a pelo esto recorre el juego entero: en uno de
+        # 100 GB tarda minutos y congela la ventana. Dos niveles bastan (el ejecutable esta
+        # en la raiz o en bin\, Binaries\...) y se descartan los instaladores y utilidades,
+        # que si no ganan por tamano en algunos juegos.
+        $icono = Get-IconoUbisoft -Id $id
+        if (-not $icono) {
+            $icono = ''
+            $exeGrande = Get-ChildItem -LiteralPath $dir -Filter *.exe -Recurse -Depth 2 -File -ErrorAction SilentlyContinue |
+                         Where-Object { $_.Name -notmatch '^(unins|setup|install|vcredist|vc_redist|dxsetup|dotnet|oalinst|UbisoftGameLauncher|UplayCrashReporter|.*[Cc]rash.*)' } |
+                         Sort-Object Length -Descending | Select-Object -First 1
+            if ($exeGrande) { $icono = $exeGrande.FullName }
+        }
         $res += New-Juego -Nombre $nombre -Fuente 'Ubisoft Connect' `
                 -Exe $launcherExe -StartDir $startDir -LaunchOptions "uplay://launch/$id/0" `
                 -Icono $icono -Carpeta $dir -Detalle "URI de Ubisoft (el .exe directo no arranca por DRM)" `

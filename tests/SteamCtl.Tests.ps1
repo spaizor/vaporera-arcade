@@ -1,6 +1,7 @@
 ﻿# =====================================================================
 #  Tests de lib/SteamCtl.ps1: duplicados, anadir, reemplazar y quitar accesos directos, y la
-#  limpieza de caratulas huerfanas. Todo sobre ficheros de $TestDrive: no toca Steam.
+#  limpieza de caratulas huerfanas, y la eleccion de instalacion y perfil de Get-SteamInfo.
+#  Todo sobre ficheros de $TestDrive y con la sesion activa simulada: no toca Steam.
 #  Se lanzan con tests\Invoke-Tests.ps1 (Pester 5, Windows PowerShell 5.1)
 # =====================================================================
 
@@ -177,5 +178,142 @@ Describe 'Remove-CaratulasHuerfanas' {
     }
     It 'no hace nada con el appid 0' {
         Remove-CaratulasHuerfanas -RutaVdf $vdf -GridDir $grid -AppId 0 | Should -Be 0
+    }
+}
+
+Describe 'Get-SteamInfo' {
+    BeforeAll {
+        # Una instalacion de Steam de mentira en $TestDrive. Los perfiles se crean con su
+        # localconfig.vdf y fechas crecientes: el ultimo de la lista es el mas reciente.
+        function New-SteamFalso {
+            param([string]$Carpeta, [string[]]$Perfiles = @(), [switch]$SinExe, [string]$LoginUsers = '')
+            $raiz = Join-Path $TestDrive $Carpeta
+            Remove-Item -LiteralPath $raiz -Recurse -Force -ErrorAction SilentlyContinue
+            $null = New-Item -ItemType Directory -Path $raiz
+            if (-not $SinExe) { Set-Content -LiteralPath (Join-Path $raiz 'steam.exe') -Value '' }
+            $fecha = [datetime]'2026-01-01'
+            foreach ($p in $Perfiles) {
+                $cfg = Join-Path $raiz "userdata\$p\config"
+                $null = New-Item -ItemType Directory -Path $cfg -Force
+                $lc = Join-Path $cfg 'localconfig.vdf'
+                Set-Content -LiteralPath $lc -Value 'x'
+                (Get-Item -LiteralPath $lc).LastWriteTime = $fecha
+                $fecha = $fecha.AddDays(1)
+            }
+            if ($LoginUsers) {
+                $null = New-Item -ItemType Directory -Path (Join-Path $raiz 'config') -Force
+                Set-Content -LiteralPath (Join-Path $raiz 'config\loginusers.vdf') -Value $LoginUsers -Encoding UTF8
+            }
+            return $raiz
+        }
+        # SteamID64 = 76561197960265728 + id de cuenta (el nombre de la carpeta de userdata)
+        $script:Id64De111 = '76561197960265839'
+        $script:Id64De222 = '76561197960265950'
+    }
+    # Sin sesion iniciada salvo que el It diga otra cosa: la de verdad de este PC no debe contar
+    BeforeEach {
+        Mock Get-ItemProperty { throw 'no hay sesión' } -ParameterFilter { $Path -like '*\ActiveProcess' }
+    }
+
+    It 'sin steam.exe devuelve $null y el motivo lo dice' {
+        $d = New-SteamFalso -Carpeta 'sinexe' -Perfiles '111' -SinExe
+        Get-SteamInfo -RutaSteam $d | Should -BeNullOrEmpty
+        Get-SteamMotivo | Should -BeLike '*steam.exe*'
+    }
+    It 'con una carpeta que no existe devuelve $null sin lanzar' {
+        Get-SteamInfo -RutaSteam (Join-Path $TestDrive 'no-existe') | Should -BeNullOrEmpty
+        Get-SteamMotivo | Should -BeLike '*steam.exe*'
+    }
+    It 'sin carpeta userdata devuelve $null y pide iniciar sesión' {
+        $d = New-SteamFalso -Carpeta 'sinuserdata'
+        Get-SteamInfo -RutaSteam $d | Should -BeNullOrEmpty
+        Get-SteamMotivo | Should -BeLike '*ningún perfil*'
+    }
+    It 'no cuenta como perfil la carpeta 0 ni las que no son números' {
+        $d = New-SteamFalso -Carpeta 'solocero'
+        foreach ($p in '0', 'anonymous') { $null = New-Item -ItemType Directory -Path (Join-Path $d "userdata\$p") -Force }
+        Get-SteamInfo -RutaSteam $d | Should -BeNullOrEmpty
+        Get-SteamMotivo | Should -BeLike '*ningún perfil*'
+    }
+    It 'elige la cuenta con la sesión iniciada aunque otra sea más reciente' {
+        Mock Get-ItemProperty { [pscustomobject]@{ ActiveUser = 111 } } -ParameterFilter { $Path -like '*\ActiveProcess' }
+        $d = New-SteamFalso -Carpeta 'sesion' -Perfiles '111', '222'
+        $s = Get-SteamInfo -RutaSteam $d
+        $s.UserId | Should -Be '111'
+        $s.ComoElegido | Should -BeExactly 'sesión iniciada'
+        $s.Perfiles | Should -Be 2
+        $s.Dir | Should -Be $d
+        $s.Exe | Should -Be (Join-Path $d 'steam.exe')
+        $s.ConfigDir | Should -Be (Join-Path $d 'userdata\111\config')
+        $s.Shortcuts | Should -Be (Join-Path $d 'userdata\111\config\shortcuts.vdf')
+        $s.GridDir | Should -Be (Join-Path $d 'userdata\111\config\grid')
+        Should -Invoke Get-ItemProperty -Times 1 -Exactly -ParameterFilter { $Path -like '*\ActiveProcess' }
+    }
+    It 'lee bien una cuenta por encima de 2^31 (el DWORD llega negativo)' {
+        Mock Get-ItemProperty { [pscustomobject]@{ ActiveUser = [int]-1294967296 } } -ParameterFilter { $Path -like '*\ActiveProcess' }
+        $d = New-SteamFalso -Carpeta 'grande' -Perfiles '3000000000', '222'
+        (Get-SteamInfo -RutaSteam $d).UserId | Should -Be '3000000000'
+    }
+    It 'con ActiveUser a 0 usa la cuenta marcada MostRecent en loginusers.vdf' {
+        Mock Get-ItemProperty { [pscustomobject]@{ ActiveUser = 0 } } -ParameterFilter { $Path -like '*\ActiveProcess' }
+        $lu = @"
+"users"
+{
+	"$($script:Id64De111)"
+	{
+		"AccountName"		"uno"
+		"MostRecent"		"1"
+		"Timestamp"		"1700000000"
+	}
+	"$($script:Id64De222)"
+	{
+		"AccountName"		"dos"
+		"MostRecent"		"0"
+		"Timestamp"		"1800000000"
+	}
+}
+"@
+        $d = New-SteamFalso -Carpeta 'mostrecent' -Perfiles '111', '222' -LoginUsers $lu
+        $s = Get-SteamInfo -RutaSteam $d
+        $s.UserId | Should -Be '111'
+        $s.ComoElegido | Should -BeExactly 'sesión iniciada'
+    }
+    It 'sin MostRecent en loginusers.vdf gana el Timestamp más alto' {
+        $lu = @"
+"users"
+{
+	"$($script:Id64De222)"
+	{
+		"AccountName"		"dos"
+		"Timestamp"		"1800000000"
+	}
+	"$($script:Id64De111)"
+	{
+		"AccountName"		"uno"
+		"Timestamp"		"1700000000"
+	}
+}
+"@
+        # 111 es el perfil mas reciente por fecha: si ganara, no se habria leido loginusers.vdf
+        $d = New-SteamFalso -Carpeta 'timestamp' -Perfiles '222', '111' -LoginUsers $lu
+        (Get-SteamInfo -RutaSteam $d).UserId | Should -Be '222'
+    }
+    It 'si la cuenta de la sesión no tiene perfil, coge el localconfig.vdf más reciente' {
+        Mock Get-ItemProperty { [pscustomobject]@{ ActiveUser = 999 } } -ParameterFilter { $Path -like '*\ActiveProcess' }
+        $d = New-SteamFalso -Carpeta 'reciente' -Perfiles '111', '222'
+        $s = Get-SteamInfo -RutaSteam $d
+        $s.UserId | Should -Be '222'
+        $s.ComoElegido | Should -BeExactly 'el más reciente'
+    }
+    It 'un perfil sin localconfig.vdf no gana a uno que lo tiene' {
+        $d = New-SteamFalso -Carpeta 'sinlocalconfig' -Perfiles '111', '222'
+        Remove-Item -LiteralPath (Join-Path $d 'userdata\222\config\localconfig.vdf')
+        (Get-SteamInfo -RutaSteam $d).UserId | Should -Be '111'
+    }
+    It 'un acierto borra el motivo del fallo anterior' {
+        $null = Get-SteamInfo -RutaSteam (Join-Path $TestDrive 'no-existe')
+        $d = New-SteamFalso -Carpeta 'bien' -Perfiles '111'
+        $null = Get-SteamInfo -RutaSteam $d
+        Get-SteamMotivo | Should -BeExactly 'No encuentro la instalación de Steam.'
     }
 }

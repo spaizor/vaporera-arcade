@@ -38,7 +38,6 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   repetidos los que tengan el mismo nombre, o el mismo ejecutable con las mismas opciones.
 - **Copia de seguridad** de `shortcuts.vdf` antes de cada escritura.
 - **Reabre Steam** al terminar, en Big Picture si lo prefieres.
-- **Modo consola** para usarlo sin ventana.
 
 ## Requisitos
 
@@ -55,7 +54,7 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
 2. Haz doble clic en **`CrearAccesoDirecto.cmd`**. Desbloquea los ficheros descargados y crea
    el acceso directo **Vaporera Arcade**, que abre la aplicación sin ventana de consola.
 
-   Si prefieres la consola, o quieres el acceso directo en más sitios:
+   Desde PowerShell puedes crear además el acceso directo en otros sitios:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\CrearAccesoDirecto.ps1 -Escritorio -MenuInicio
@@ -87,8 +86,6 @@ descargado.
 
 ## Uso
 
-### Con ventana
-
 Haz doble clic en el acceso directo **Vaporera Arcade** que creó `CrearAccesoDirecto.cmd`. Abre la
 aplicación sin mostrar la consola. También puedes ejecutar el script a mano:
 
@@ -110,18 +107,6 @@ Casillas de la parte inferior:
 - **Reemplazar si ya existe:** sobrescribe el acceso directo si ya había uno con el mismo
   nombre o el mismo ejecutable.
 
-### Modo consola
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\VaporeraArcade.ps1 -Consola
-```
-
-Con `-Juego` filtra la lista por nombre:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\VaporeraArcade.ps1 -Consola -Juego "Forza"
-```
-
 ## De dónde salen las carátulas
 
 Por orden de preferencia:
@@ -135,7 +120,8 @@ Por orden de preferencia:
    Se guarda en `%LOCALAPPDATA%\VaporeraArcade\config.json`, fuera de la carpeta de la aplicación.
 3. **Imágenes del propio juego.** Si no hay nada más, compone las carátulas con el fondo y el
    logo que trae el juego instalado. En las apps de la Store usa el icono de la propia app, el
-   mismo que enseña Windows en el menú Inicio.
+   mismo que enseña Windows en el menú Inicio, con el nombre de la app al lado, porque el
+   icono solo no siempre basta para reconocerla.
 
 Cuando se busca por el nombre, se compara el título de cada resultado con el del juego y se
 descarta el que no cuadre, en vez de quedarse con el primero: buscar el ejecutable `obs64` no
@@ -212,8 +198,9 @@ el origen de las carátulas en **Solo imágenes del propio juego** no se conecta
 - `%LOCALAPPDATA%\VaporeraArcade\vaporera-arcade.log`: el registro de actividad. Contiene
   **rutas completas** (que incluyen tu nombre de usuario de Windows), los nombres de los juegos
   que tienes instalados y el **identificador de tu perfil de Steam**. Míralo antes de pegarlo
-  en una incidencia de GitHub o de enviárselo a nadie. Crece sin límite: puedes borrarlo cuando
-  quieras y se vuelve a crear.
+  en una incidencia de GitHub o de enviárselo a nadie. Cuando pasa de 1 MB, al abrir la
+  aplicación se renombra a `vaporera-arcade.log.1` (sustituyendo al anterior) y se empieza uno
+  nuevo. Puedes borrar los dos cuando quieras.
 - `%TEMP%\VaporeraArcade\<appid>\`: las imágenes a medio preparar de cada juego (~1,6 MB por
   juego). Al abrir la aplicación se borran las que tengan más de un día.
 - En la carpeta de Steam: el acceso directo en `shortcuts.vdf`, sus copias de seguridad
@@ -257,7 +244,7 @@ también se borran.
 
 ```
 Vaporera Arcade
-├── VaporeraArcade.ps1           aplicación: ventana WPF y modo consola
+├── VaporeraArcade.ps1           aplicación: ventana WPF
 ├── CrearAccesoDirecto.cmd       lanzador del script de al lado (doble clic)
 ├── CrearAccesoDirecto.ps1       desbloquea los ficheros y crea el acceso directo
 ├── docs
@@ -275,8 +262,7 @@ Los ajustes y el registro de actividad se guardan fuera de la carpeta de la apli
 `%LOCALAPPDATA%\VaporeraArcade\`: `config.json` (la clave de SteamGridDB) y
 `vaporera-arcade.log`. Así funciona también instalada en una carpeta sin permiso de escritura,
 como `Archivos de programa`. Si algo falla, el detalle del error está en ese `.log`. La primera
-línea de cada arranque lleva la versión de la aplicación, el modo, la versión de PowerShell y la
-de Windows: es lo que conviene adjuntar al informar de un fallo. La versión también aparece
+línea de cada arranque lleva la versión de la aplicación, la de PowerShell y la de Windows: es lo que conviene adjuntar al informar de un fallo. La versión también aparece
 junto al nombre en la cabecera de la ventana.
 
 - **`shortcuts.vdf` se lee entero y se vuelve a escribir** a partir de su estructura, no

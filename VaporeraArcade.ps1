@@ -5,11 +5,8 @@
 #  apps de la Store y programas ejecutados hace poco), descarga las
 #  caratulas oficiales y escribe el acceso directo en shortcuts.vdf.
 #
-#  Uso:  .\VaporeraArcade.ps1            (o el acceso directo que crea CrearAccesoDirecto.ps1)
-#        .\VaporeraArcade.ps1 -Consola   (modo texto, sin ventana)
+#  Uso:  .\VaporeraArcade.ps1   (o el acceso directo que crea CrearAccesoDirecto.ps1)
 # =====================================================================
-param([switch]$Consola, [string]$Juego)
-
 $ErrorActionPreference = 'Stop'
 
 # Version de la aplicacion. Sale en el titulo de la ventana, junto al nombre de la cabecera, en
@@ -38,6 +35,19 @@ function Write-Registro {
     } catch { }
 }
 
+# Se llama una vez al arrancar. Pasado el limite, el registro actual pasa a ser el .log.1
+# (pisando el anterior) y se empieza uno nuevo: nunca ocupan mas del doble del limite entre
+# los dos y el .1 conserva lo ultimo por si hace falta para un informe. Devuelve si ha rotado.
+function Invoke-RotarRegistro {
+    param([long]$MaxBytes = 1MB)
+    try {
+        $f = Get-Item -LiteralPath $LogFile -ErrorAction Stop
+        if ($f.Length -lt $MaxBytes) { return $false }
+        Move-Item -LiteralPath $LogFile -Destination "$LogFile.1" -Force -ErrorAction Stop
+        return $true
+    } catch { return $false }
+}
+
 # Guarda un error con su detalle tecnico (fichero y linea) para poder diagnosticarlo
 function Write-RegistroError {
     param([string]$Contexto, $Fallo)
@@ -59,7 +69,8 @@ function Show-AvisoError {
 }
 
 # Cualquier error sin controlar (una lib que no carga, el XAML, Add-Type...) acaba aqui.
-# Lanzado desde el acceso directo no hay consola: sin esto la ventana no aparece.
+# Lanzado desde el acceso directo la ventana de PowerShell va oculta: sin esto, la aplicacion
+# no aparece y no se ve por que.
 trap {
     $fallo = $_
     Write-RegistroError -Contexto 'error sin controlar' -Fallo $fallo
@@ -72,14 +83,15 @@ trap {
         $texto += "`r`n`r`n($(Split-Path $fallo.InvocationInfo.ScriptName -Leaf), línea $($fallo.InvocationInfo.ScriptLineNumber))"
     }
     $texto += "`r`n`r`nDetalle en el registro:`r`n$LogFile"
-    if ($Consola) { Write-Host $texto -ForegroundColor Red } else { Show-AvisoError $texto }
+    Show-AvisoError $texto
     exit 1
 }
 
 # Primera linea del registro en cada arranque. Es lo que hay que pedir en un informe de fallo:
-# sin la version y el modo, un log ajeno no dice de que codigo viene.
-$modo = if ($Consola) { 'consola' } else { 'ventana' }
-Write-Registro "=== Vaporera Arcade $AppVersion ($modo) | PowerShell $($PSVersionTable.PSVersion) | Windows $([Environment]::OSVersion.Version) ==="
+# sin la version, un log ajeno no dice de que codigo viene.
+$registroRotado = Invoke-RotarRegistro
+Write-Registro "=== Vaporera Arcade $AppVersion | PowerShell $($PSVersionTable.PSVersion) | Windows $([Environment]::OSVersion.Version) ==="
+if ($registroRotado) { Write-Registro "El registro anterior pasaba de 1 MB: se ha movido a $(Split-Path $LogFile -Leaf).1" }
 
 . (Join-Path $Raiz 'lib\Config.ps1')
 . (Join-Path $Raiz 'lib\Vdf.ps1')
@@ -94,14 +106,14 @@ function Test-Contiene {
 }
 
 # =====================================================================
-#  Nucleo compartido por la GUI y el modo consola
+#  Nucleo: caratulas, anadir y quitar
 # =====================================================================
 
 # Las imagenes que Steam no puede dejar de tener: sin ellas el juego sale en blanco
 $ImagenesClave = [ordered]@{ p = 'portada'; cap = 'cápsula'; hero = 'cabecera' }
 
-# Deja las imagenes en config\grid\: copia las que preparo la GUI o las genera al vuelo
-# (modo consola). Devuelve Ok (estan las tres imprescindibles), la ruta del _icon.png (la que
+# Deja las imagenes en config\grid\: copia las que preparo la vista previa o, si no llega
+# ninguna, las genera al vuelo. Devuelve Ok (estan las tres imprescindibles), la ruta del _icon.png (la que
 # va al campo 'icon' del VDF) y las que falten.
 function Invoke-Caratulas {
     param(
@@ -328,43 +340,6 @@ function Invoke-QuitarJuego {
             Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log
         }
     }
-}
-
-# =====================================================================
-#  Modo consola
-# =====================================================================
-if ($Consola) {
-    $LogConsola = { param($m) Write-Host $m; Write-Registro $m }
-    $steam = Get-SteamInfo
-    if (-not $steam) { Write-Host (Get-SteamMotivo) -ForegroundColor Red; exit 1 }
-    $todos = Get-TodosLosJuegos -IncluirRecientes -IncluirApps -Log $LogConsola
-    if ($Juego) { $todos = $todos | Where-Object { Test-Contiene $_.Nombre $Juego } }
-    if (-not $todos) { Write-Host 'Ningún juego detectado con ese filtro.'; exit 1 }
-    # @(): con un solo juego detectado, Get-TodosLosJuegos devuelve el objeto suelto (PS
-    # desenvuelve los arrays de un elemento) y no tendria .Count para validar el rango.
-    $lista = @($todos)
-    $i = 0
-    $lista | ForEach-Object { Write-Host ("[{0,2}] {1,-45} {2}" -f $i, $_.Nombre, $_.Fuente); $i++ }
-    # Lo que teclea el usuario no vale hasta comprobarlo. Antes iba directo a '$todos[[int]$sel]':
-    # un texto o un Intro a secas lanzaban al convertir a [int] y saltaba el trap, como si se
-    # hubiera roto la aplicacion; un negativo indexa DESDE EL FINAL y anadia en silencio un
-    # juego que no era el elegido; y uno fuera de rango daba $null y reventaba despues en el
-    # binding de Invoke-AnadirJuego.
-    $j = $null
-    while ($null -eq $j) {
-        $sel = Read-Host 'Número del juego a añadir (Intro para salir)'
-        if ([string]::IsNullOrWhiteSpace($sel)) { Write-Host 'Cancelado.'; exit 1 }
-        $n = 0
-        if (-not [int]::TryParse($sel.Trim(), [ref]$n)) {
-            Write-Host 'Eso no es un número.' -ForegroundColor Yellow
-        } elseif ($n -lt 0 -or $n -ge $lista.Count) {
-            Write-Host ("Elige un número entre 0 y {0}." -f ($lista.Count - 1)) -ForegroundColor Yellow
-        } else {
-            $j = $lista[$n]
-        }
-    }
-    $r = Invoke-AnadirJuego -Juego $j -Nombre $j.Nombre -Steam $steam -Log $LogConsola
-    exit $(if ($r.Ok) { 0 } else { 1 })
 }
 
 # =====================================================================

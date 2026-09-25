@@ -107,6 +107,57 @@ Describe 'Get-NombreUbisoft' {
     }
 }
 
+Describe 'Get-IconoUbisoft' {
+    BeforeAll {
+        $base  = 'HKCU:\Software\VaporeraArcadeTests\' + [guid]::NewGuid().ToString() + '\Uninstall'
+        $base2 = $base + '2'
+        $null = New-Item -Path $base -Force
+        $null = New-Item -Path $base2 -Force
+        function Set-Clave([string]$raiz, [string]$id, $icono) {
+            $k = New-Item -Path (Join-Path $raiz "Uplay Install $id") -Force
+            if ($null -ne $icono) { $null = New-ItemProperty -LiteralPath $k.PSPath -Name DisplayIcon -Value $icono }
+        }
+        # los ficheros solo tienen que existir: aqui no se leen
+        $data = Join-Path $TestDrive 'Ubisoft Game Launcher\data'
+        $ico = Join-Path $data 'abc123.ico'
+        $exe = Join-Path $TestDrive 'Juego [x]\Juego.exe'
+        $dll = Join-Path $data 'iconos.dll'
+        foreach ($f in $ico, $exe, $dll) {
+            $null = [IO.Directory]::CreateDirectory((Split-Path $f -Parent))
+            [IO.File]::WriteAllBytes($f, [byte[]]@())
+        }
+        Set-Clave $base '1' ($ico -replace '\\', '/')             # como lo escribe el lanzador
+        Set-Clave $base '2' ('"' + $exe + '",0')
+        Set-Clave $base '3' (Join-Path $data 'no-existe.ico')
+        Set-Clave $base '4' ($dll + ',-101')
+        Set-Clave $base '5' ''
+        Set-Clave $base '6' $null
+        Set-Clave $base2 '7' $ico
+    }
+    AfterAll {
+        Remove-Item -Path 'HKCU:\Software\VaporeraArcadeTests' -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'pasa la ruta con / a \' {
+        Get-IconoUbisoft -Id '1' -Bases @($base, $base2) | Should -BeExactly $ico
+    }
+    It 'quita las comillas y el índice de un exe (con [ ] en la ruta)' {
+        Get-IconoUbisoft -Id '2' -Bases @($base, $base2) | Should -BeExactly $exe
+    }
+    It 'lo encuentra en la segunda base' {
+        Get-IconoUbisoft -Id '7' -Bases @($base, $base2) | Should -BeExactly $ico
+    }
+    It 'id <Id> (<Caso>): $null, para caer al exe más grande' -ForEach @(
+        @{ Id = '3'; Caso = 'el fichero no existe' }
+        @{ Id = '4'; Caso = 'ni .ico ni .exe' }
+        @{ Id = '5'; Caso = 'DisplayIcon vacío' }
+        @{ Id = '6'; Caso = 'sin DisplayIcon' }
+        @{ Id = '8'; Caso = 'sin clave' }
+    ) {
+        Get-IconoUbisoft -Id $Id -Bases @($base, $base2) | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-AnchoPng' {
     It 'lee el ancho de la cabecera' {
         $f = Join-Path $TestDrive 'ancho.png'

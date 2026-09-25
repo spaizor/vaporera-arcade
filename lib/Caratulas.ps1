@@ -369,11 +369,43 @@ function Test-EsLogo {
     return $true
 }
 
-# Compone una caratula a partir de un fondo + logo (plan B sin internet)
+# Texto blanco con sombra dentro del rectangulo. Si no cabe entero (un nombre largo partido en
+# varias lineas se cortaria por abajo) baja la letra hasta que quepa. Las medidas llegan ya
+# como [single]: 'New-Object RectangleF(($Ancho*0.08)+3, 3, ...)' hace que PS 5.1 lea el resto
+# de argumentos como un array y lo sume al primero (op_Addition).
+function Add-TextoConSombra {
+    param(
+        [System.Drawing.Graphics]$Graficos, [string]$Texto,
+        [single]$X, [single]$Y, [single]$Ancho, [single]$Alto, [int]$Tam,
+        [System.Drawing.StringAlignment]$Horizontal = 'Center',
+        [System.Drawing.StringAlignment]$Vertical = 'Center'
+    )
+    $fmt = New-Object System.Drawing.StringFormat
+    $fmt.Alignment = $Horizontal; $fmt.LineAlignment = $Vertical
+    while ($true) {
+        $fuente = New-Object System.Drawing.Font('Segoe UI', $Tam, [System.Drawing.FontStyle]::Bold)
+        $medida = $Graficos.MeasureString($Texto, $fuente, [int]$Ancho, $fmt)
+        if ($medida.Height -le $Alto -or $Tam -le 10) { break }
+        $fuente.Dispose()
+        $Tam = [int]($Tam * 0.9)
+    }
+    $xs = [single]($X + 3); $ys = [single]($Y + 3)
+    $rect   = New-Object System.Drawing.RectangleF($X, $Y, $Ancho, $Alto)
+    $rect2  = New-Object System.Drawing.RectangleF($xs, $ys, $Ancho, $Alto)
+    $sombra = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200,0,0,0))
+    $blanco = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+    $Graficos.DrawString($Texto, $fuente, $sombra, $rect2, $fmt)
+    $Graficos.DrawString($Texto, $fuente, $blanco, $rect, $fmt)
+    $sombra.Dispose(); $blanco.Dispose(); $fuente.Dispose(); $fmt.Dispose()
+}
+
+# Compone una caratula a partir de un fondo + logo (plan B sin internet). Pinta el logo o el
+# texto, salvo con -LogoYNombre, que pone los dos: es para los iconos de las apps de la Store,
+# que a diferencia del logo de un juego no llevan el nombre y solos no se reconocen.
 function New-CaratulaCompuesta {
     param(
         [System.Drawing.Bitmap]$Fondo, [System.Drawing.Bitmap]$Logo,
-        [int]$Ancho, [int]$Alto, [string]$Texto = ''
+        [int]$Ancho, [int]$Alto, [string]$Texto = '', [switch]$LogoYNombre
     )
     if ($Fondo) { $dst = New-ImagenCover -Origen $Fondo -Ancho $Ancho -Alto $Alto }
     else {
@@ -392,29 +424,35 @@ function New-CaratulaCompuesta {
         $g.FillRectangle($velo, 0, 0, $Ancho, $Alto)
         $velo.Dispose()
     }
-    if ($Logo) {
+    if ($Logo -and $LogoYNombre -and $Texto) {
+        if ($Alto -ge $Ancho) {
+            # vertical (portada): el icono acaba en la mitad y el nombre va debajo
+            $esc = [Math]::Min(($Ancho * 0.5) / $Logo.Width, ($Alto * 0.28) / $Logo.Height)
+            $lw = [int]($Logo.Width * $esc); $lh = [int]($Logo.Height * $esc)
+            $g.DrawImage($Logo, [int](($Ancho - $lw)/2), [int]($Alto * 0.5) - $lh, $lw, $lh)
+            Add-TextoConSombra -Graficos $g -Texto $Texto -X ($Ancho * 0.08) -Y ($Alto * 0.54) `
+                -Ancho ($Ancho * 0.84) -Alto ($Alto * 0.36) -Tam ([Math]::Max(14, [int]($Ancho / 13))) -Vertical Near
+        } else {
+            # apaisada (capsula): el icono a la izquierda y el nombre a su derecha
+            $lado = $Alto * 0.6
+            $esc = [Math]::Min($lado / $Logo.Width, $lado / $Logo.Height)
+            $lw = [int]($Logo.Width * $esc); $lh = [int]($Logo.Height * $esc)
+            $lx = [int]($Ancho * 0.07)
+            $g.DrawImage($Logo, $lx + [int](($lado - $lw)/2), [int](($Alto - $lh)/2), $lw, $lh)
+            $tx = $lx + $lado + ($Ancho * 0.05)
+            Add-TextoConSombra -Graficos $g -Texto $Texto -X $tx -Y ($Alto * 0.1) `
+                -Ancho ($Ancho * 0.95 - $tx) -Alto ($Alto * 0.8) -Tam ([Math]::Max(12, [int]($Alto / 7))) -Horizontal Near
+        }
+    }
+    elseif ($Logo) {
         $maxW = [int]($Ancho * 0.72); $maxH = [int]($Alto * 0.42)
         $esc = [Math]::Min($maxW / $Logo.Width, $maxH / $Logo.Height)
         $lw = [int]($Logo.Width * $esc); $lh = [int]($Logo.Height * $esc)
         $g.DrawImage($Logo, [int](($Ancho - $lw)/2), [int](($Alto - $lh)/2), $lw, $lh)
     }
     elseif ($Texto) {
-        $tam = [Math]::Max(14, [int]($Ancho / 11))
-        $fuente = New-Object System.Drawing.Font('Segoe UI', $tam, [System.Drawing.FontStyle]::Bold)
-        $fmt = New-Object System.Drawing.StringFormat
-        $fmt.Alignment = 'Center'; $fmt.LineAlignment = 'Center'
-        # las medidas, en variables: 'New-Object RectangleF(($Ancho*0.08)+3, 3, ...)' hace que
-        # PS 5.1 lea el resto de argumentos como un array y lo sume al primero (op_Addition)
-        $rx = [single]($Ancho * 0.08)
-        $rw = [single]($Ancho * 0.84)
-        $rh = [single]$Alto
-        $rect = New-Object System.Drawing.RectangleF($rx, [single]0, $rw, $rh)
-        $sombra = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200,0,0,0))
-        $rect2 = New-Object System.Drawing.RectangleF(($rx + 3), [single]3, $rw, $rh)
-        $g.DrawString($Texto, $fuente, $sombra, $rect2, $fmt)
-        $blanco = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-        $g.DrawString($Texto, $fuente, $blanco, $rect, $fmt)
-        $sombra.Dispose(); $blanco.Dispose(); $fuente.Dispose()
+        Add-TextoConSombra -Graficos $g -Texto $Texto -X ($Ancho * 0.08) -Y 0 `
+            -Ancho ($Ancho * 0.84) -Alto $Alto -Tam ([Math]::Max(14, [int]($Ancho / 11)))
     }
     $g.Dispose()
     return $dst
@@ -433,7 +471,8 @@ function Save-Png {
 function Get-AssetsLocales {
     param([string]$Carpeta, [string]$Icono)
     # LogoDelExe: el icono que saca ExtractAssociatedIcon es de 32x32. Vale para componer una
-    # caratula, pero no para generar un _icon.png de 256 (sale borroso) ni un _logo.png.
+    # caratula, pero no para generar un _icon.png de 256 (sale borroso) ni un _logo.png. Un
+    # .ico (Ubisoft) se lee con su imagen grande, pero si no la trae se trata igual.
     $r = @{ Fondo = $null; Logo = $null; LogoDelExe = $false }
     if ($Carpeta -and (Test-Path -LiteralPath $Carpeta)) {
         $pngs = Get-ChildItem -LiteralPath $Carpeta -Filter *.png -ErrorAction SilentlyContinue
@@ -448,7 +487,7 @@ function Get-AssetsLocales {
     }
     if (-not $r.Logo -and $Icono -and (Test-Path -LiteralPath $Icono)) {
         $r.Logo = Get-BitmapDesdeArchivo -Ruta $Icono
-        if ($r.Logo) { $r.LogoDelExe = [bool]($Icono -match '\.exe$') }
+        if ($r.Logo) { $r.LogoDelExe = [bool](($Icono -match '\.exe$') -or $r.Logo.Width -lt 128) }
     }
     return $r
 }
@@ -473,7 +512,7 @@ function New-CaratulasSteam {
     if ($OrigenArte -ne 'Automatico') { Registrar "Origen de las carátulas forzado a: $OrigenArte" }
 
     $origen = 'assets locales'
-    $poster = $null; $hero = $null; $capsule = $null; $logo = $null
+    $poster = $null; $hero = $null; $capsule = $null; $logo = $null; $logoDeSgdb = $false
 
     # 1) Microsoft Store
     $storeId = $null
@@ -511,7 +550,7 @@ function New-CaratulasSteam {
             if ($sg['Poster'])  { $poster  = Get-BitmapDesdeUrl $sg['Poster'] }
             if ($sg['Hero'])    { $hero    = Get-BitmapDesdeUrl $sg['Hero'] }
             if ($sg['Capsule']) { $capsule = Get-BitmapDesdeUrl $sg['Capsule'] }
-            if ($sg['Logo'])    { $logo    = Get-BitmapDesdeUrl $sg['Logo'] }
+            if ($sg['Logo'])    { $logo    = Get-BitmapDesdeUrl $sg['Logo']; $logoDeSgdb = [bool]$logo }
             if ($poster) { $origen = 'SteamGridDB' }
         }
     }
@@ -523,8 +562,8 @@ function New-CaratulasSteam {
     # se puede cargar suelta, de ahi el Get-Command.
     $iconoLocal = $Juego.Icono
     $prefijoApp = 'shell:AppsFolder\'
-    if (-not $iconoLocal -and $Juego.LaunchOptions -and $Juego.LaunchOptions.StartsWith($prefijoApp) -and
-        (Get-Command Get-LogoAppStore -ErrorAction SilentlyContinue)) {
+    $esApp = [bool]($Juego.LaunchOptions -and $Juego.LaunchOptions.StartsWith($prefijoApp))
+    if (-not $iconoLocal -and $esApp -and (Get-Command Get-LogoAppStore -ErrorAction SilentlyContinue)) {
         $iconoLocal = Get-LogoAppStore -Aumid $Juego.LaunchOptions.Substring($prefijoApp.Length)
         if ($iconoLocal) { Registrar "  logo de la app: $(Split-Path $iconoLocal -Leaf)" }
     }
@@ -533,18 +572,21 @@ function New-CaratulasSteam {
     if (-not $logo) { $logo = $loc.Logo; $logoDelExe = [bool]$loc.LogoDelExe }
     $fondoLocal = $loc.Fondo
     if (-not $poster) { Registrar 'Componiendo carátulas con los assets locales del juego...' }
+    # El icono de una app (del paquete o la baldosa del catalogo) no lleva el nombre: se pinta
+    # debajo. El logo de SteamGridDB si lo suele llevar, igual que el de un juego.
+    $conNombre = $esApp -and -not $logoDeSgdb
 
     $rutas = @{}
     # p.png 600x900
     $fondoPortada = $fondoLocal; if (-not $fondoPortada) { $fondoPortada = $hero }
     if ($poster) { $b = New-ImagenCover -Origen $poster -Ancho 600 -Alto 900 }
-    else         { $b = New-CaratulaCompuesta -Fondo $fondoPortada -Logo $logo -Ancho 600 -Alto 900 -Texto $NombreFinal }
+    else         { $b = New-CaratulaCompuesta -Fondo $fondoPortada -Logo $logo -Ancho 600 -Alto 900 -Texto $NombreFinal -LogoYNombre:$conNombre }
     $rutas['p'] = Join-Path $GridDir "${AppId}p.png"; Save-Png -Bitmap $b -Ruta $rutas['p']; $b.Dispose()
 
     # .png 460x215
     $baseCap = $capsule; if (-not $baseCap) { $baseCap = $hero }
     if ($baseCap) { $b = New-ImagenCover -Origen $baseCap -Ancho 460 -Alto 215 }
-    else          { $b = New-CaratulaCompuesta -Fondo $fondoLocal -Logo $logo -Ancho 460 -Alto 215 -Texto $NombreFinal }
+    else          { $b = New-CaratulaCompuesta -Fondo $fondoLocal -Logo $logo -Ancho 460 -Alto 215 -Texto $NombreFinal -LogoYNombre:$conNombre }
     $rutas['cap'] = Join-Path $GridDir "${AppId}.png"; Save-Png -Bitmap $b -Ruta $rutas['cap']; $b.Dispose()
 
     # _hero.png 1920x620
