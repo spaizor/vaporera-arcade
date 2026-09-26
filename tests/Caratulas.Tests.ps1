@@ -184,6 +184,65 @@ Describe 'New-CaratulaCompuesta' {
     }
 }
 
+Describe 'Get-BitmapDesdeIco' {
+    BeforeAll {
+        # .ico con varios fotogramas PNG en el orden que se pida: cabecera, una entrada de 16
+        # bytes por imagen (0 de lado = 256) y detras los PNG seguidos
+        function New-IcoVarios([string]$ruta, [int[]]$lados) {
+            $pngs = @(foreach ($lado in $lados) {
+                $bm = New-BitmapPrueba $lado $lado -EsquinasTransparentes
+                $ms = New-Object System.IO.MemoryStream
+                try { $bm.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png) } finally { $bm.Dispose() }
+                ,$ms.ToArray()
+            })
+            $bytes = New-Object System.Collections.Generic.List[byte]
+            $bytes.AddRange([byte[]](0, 0, 1, 0)); $bytes.AddRange([BitConverter]::GetBytes([uint16]$lados.Count))
+            $pos = 6 + 16 * $lados.Count
+            for ($i = 0; $i -lt $lados.Count; $i++) {
+                $l = [byte]($lados[$i] % 256)
+                $bytes.AddRange([byte[]]($l, $l, 0, 0, 1, 0, 32, 0))
+                $bytes.AddRange([BitConverter]::GetBytes([uint32]$pngs[$i].Length))
+                $bytes.AddRange([BitConverter]::GetBytes([uint32]$pos))
+                $pos += $pngs[$i].Length
+            }
+            foreach ($p in $pngs) { $bytes.AddRange([byte[]]$p) }
+            [IO.File]::WriteAllBytes($ruta, $bytes.ToArray())
+        }
+    }
+
+    It 'se queda con el fotograma más grande aunque no sea el primero (<Lados>)' -ForEach @(
+        @{ Lados = @(16, 256, 32) }
+        @{ Lados = @(256, 48, 32, 16) }     # el orden de los de GOG
+        @{ Lados = @(16, 32, 48) }
+    ) {
+        $ico = Join-Path $TestDrive 'varios.ico'
+        New-IcoVarios $ico $Lados
+        $bm = Get-BitmapDesdeArchivo -Ruta $ico
+        try { $bm.Width | Should -Be ($Lados | Measure-Object -Maximum).Maximum }
+        finally { if ($bm) { $bm.Dispose() } }
+    }
+
+    It 'lee un fotograma BMP (el que escribe Icon.Save)' {
+        $bm = New-BitmapPrueba 48 48
+        $hicon = $bm.GetHicon()
+        $icono = [System.Drawing.Icon]::FromHandle($hicon)
+        $ms = New-Object System.IO.MemoryStream
+        $icono.Save($ms)
+        $icono.Dispose(); $bm.Dispose()
+        $bytes = $ms.ToArray()
+        $bytes[$bytes[18] + 256 * $bytes[19]] | Should -Not -Be 0x89     # de verdad no es PNG
+        $r = Get-BitmapDesdeIco -Bytes $bytes
+        try { $r.Width | Should -Be 48 } finally { if ($r) { $r.Dispose() } }
+    }
+
+    It 'devuelve $null con lo que no es un .ico, o con el índice roto' {
+        Get-BitmapDesdeIco -Bytes ([byte[]](1..40)) | Should -BeNullOrEmpty
+        # dice que la imagen esta mas alla del final del fichero
+        $roto = [byte[]](0, 0, 1, 0, 1, 0, 32, 32, 0, 0, 1, 0, 32, 0, 100, 0, 0, 0, 22, 0, 0, 0) + [byte[]](1..10)
+        Get-BitmapDesdeIco -Bytes $roto | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-AssetsLocales con un .ico' {
     BeforeAll {
         # Un .ico de una sola imagen en PNG, montado a mano: cabecera (6 bytes), una entrada
@@ -217,5 +276,172 @@ Describe 'Get-AssetsLocales con un .ico' {
             $r.Logo.Width | Should -Be 32
             $r.LogoDelExe | Should -BeTrue
         } finally { if ($r.Logo) { $r.Logo.Dispose() } }
+    }
+}
+
+Describe 'Get-SgdbAlternativas' {
+    BeforeAll {
+        Mock Invoke-RestMethod {
+            [pscustomobject]@{ data = @(
+                [pscustomobject]@{ url = 'https://cdn/a.png'; thumb = 'https://cdn/thumb/a.jpg'; width = 600; height = 900; author = [pscustomobject]@{ name = 'Jinx' } }
+                [pscustomobject]@{ url = ''; thumb = 'https://cdn/thumb/x.jpg' }                  # sin imagen: fuera
+                [pscustomobject]@{ url = 'https://cdn/b.png'; thumb = $null; width = 600; height = 900; author = $null }
+            ) }
+        }
+    }
+
+    It 'pide a <Ranura> lo que toca: <Esperada>' -ForEach @(
+        @{ Ranura = 'p';    Esperada = 'grids/game/1915?dimensions=600x900&mimes=image/png,image/jpeg&types=static' }
+        @{ Ranura = 'cap';  Esperada = 'grids/game/1915?dimensions=460x215,920x430&mimes=image/png,image/jpeg&types=static' }
+        @{ Ranura = 'hero'; Esperada = 'heroes/game/1915?mimes=image/png,image/jpeg&types=static' }
+        @{ Ranura = 'logo'; Esperada = 'logos/game/1915?mimes=image/png&types=static' }
+    ) {
+        [void](Get-SgdbAlternativas -Id '1915' -Ranura $Ranura -Cabeceras @{})
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $Uri -eq "https://www.steamgriddb.com/api/v2/$Esperada" }
+    }
+
+    It 'devuelve las que tienen imagen, con su autor y su miniatura (o la imagen si no la hay)' {
+        $r = @(Get-SgdbAlternativas -Id '1' -Ranura 'p' -Cabeceras @{})
+        $r.Count | Should -Be 2
+        $r[0].Origen | Should -Be 'SteamGridDB'
+        $r[0].Detalle | Should -Be 'Jinx'
+        $r[0].Miniatura | Should -Be 'https://cdn/thumb/a.jpg'
+        $r[0].Ancho | Should -Be 600
+        $r[1].Detalle | Should -Be ''
+        $r[1].Miniatura | Should -Be 'https://cdn/b.png'
+    }
+}
+
+Describe 'Get-StoreAlternativas' {
+    BeforeAll {
+        # dos idiomas con el mismo poster: tiene que salir una vez
+        function New-Img($p, $u, $w, $h) { [pscustomobject]@{ ImagePurpose = $p; Uri = $u; Width = $w; Height = $h } }
+        $producto = [pscustomobject]@{ LocalizedProperties = @(
+            [pscustomobject]@{ Images = @(
+                (New-Img 'BoxArt' '//img/box' 1080 1080)
+                (New-Img 'Poster' '//img/poster' 720 1080)
+                (New-Img 'SuperHeroArt' '//img/hero' 1920 1080)
+                (New-Img 'Logo' '//img/logo' 300 300)
+            ) }
+            [pscustomobject]@{ Images = @( (New-Img 'Poster' '//img/poster' 720 1080) ) }
+        ) }
+    }
+
+    It 'portada: primero el Poster y luego el BoxArt, sin repetir, con https y miniatura reducida' {
+        $r = @(Get-StoreAlternativas -Ranura 'p' -Producto $producto)
+        $r.Detalle | Should -Be @('Poster', 'BoxArt')
+        $r[0].Url | Should -Be 'https://img/poster'
+        $r[0].Miniatura | Should -Be 'https://img/poster?w=240'
+        $r[0].Origen | Should -Be 'Microsoft Store'
+    }
+    It 'cabecera: el SuperHeroArt, con la miniatura más ancha' {
+        $r = @(Get-StoreAlternativas -Ranura 'hero' -Producto $producto)
+        $r.Detalle | Should -Be @('SuperHeroArt')
+        $r[0].Miniatura | Should -Be 'https://img/hero?w=480'
+    }
+    It 'logo: nada (la baldosa de la Store no vale de logo)' {
+        @(Get-StoreAlternativas -Ranura 'logo' -Producto $producto).Count | Should -Be 0
+    }
+    It 'sin StoreId ni ficha: nada, sin preguntar a la red' {
+        Mock Invoke-RestMethod { throw 'no deberia llamarse' }
+        @(Get-StoreAlternativas -Ranura 'p' -StoreId '').Count | Should -Be 0
+    }
+}
+
+Describe 'Get-Alternativas' {
+    BeforeAll {
+        Mock Get-StoreAlternativas { @((New-Alternativa -Origen 'Microsoft Store' -Detalle 'Poster' -Url 'https://s/1')) }
+        Mock Get-SgdbAlternativas { @((New-Alternativa -Origen 'SteamGridDB' -Url "https://g/$Id")) }
+        Mock Find-SgdbId { '77' }
+    }
+
+    It 'primero la Store y luego SteamGridDB, y devuelve el id que ha encontrado' {
+        Mock Get-SgdbClave { 'clave' }
+        $r = Get-Alternativas -Ranura 'p' -Nombre 'Juego' -StoreId '9ABC'
+        @($r.Lista).Origen | Should -Be @('Microsoft Store', 'SteamGridDB')
+        $r.Lista[1].Url | Should -Be 'https://g/77'
+        $r.SgdbId | Should -Be '77'
+    }
+    It 'con el id ya sabido no vuelve a buscar el juego' {
+        Mock Get-SgdbClave { 'clave' }
+        $r = Get-Alternativas -Ranura 'hero' -Nombre 'Juego' -SgdbId '5'
+        Should -Invoke Find-SgdbId -Times 0 -Exactly
+        $r.Lista[0].Url | Should -Be 'https://g/5'
+    }
+    It 'sin clave de SteamGridDB, solo la Store, y lo dice' {
+        Mock Get-SgdbClave { $null }
+        $lineas = New-Object System.Collections.ArrayList
+        $r = Get-Alternativas -Ranura 'p' -Nombre 'Juego' -StoreId '9ABC' -Log { param($m) [void]$lineas.Add($m) }
+        @($r.Lista).Count | Should -Be 1
+        ($lineas -join ' ') | Should -Match 'sin clave'
+    }
+    It 'si SteamGridDB falla, se queda con lo de la Store y no lanza' {
+        Mock Get-SgdbClave { 'clave' }
+        Mock Get-SgdbAlternativas { throw 'sin red' }
+        $r = Get-Alternativas -Ranura 'p' -Nombre 'Juego' -StoreId '9ABC'
+        @($r.Lista).Origen | Should -Be @('Microsoft Store')
+    }
+}
+
+Describe 'Set-CaratulaRanura' {
+    BeforeAll {
+        $grid = Join-Path $TestDrive 'grid'
+        $null = New-Item -ItemType Directory -Path $grid -Force
+        # imagen de origen apaisada, para ver que se recorta a la medida del hueco
+        $origen = Join-Path $TestDrive 'origen.png'
+        $bm = New-BitmapPrueba 1000 500
+        $bm.Save($origen, [System.Drawing.Imaging.ImageFormat]::Png); $bm.Dispose()
+        function Get-Medidas([string]$ruta) {
+            $b = Get-BitmapDesdeArchivo -Ruta $ruta
+            try { "$($b.Width)x$($b.Height)" } finally { $b.Dispose() }
+        }
+    }
+    BeforeEach { Get-ChildItem -LiteralPath $grid | Remove-Item -Force }
+
+    It '<Ranura>: <Fichero> a <Medidas>' -ForEach @(
+        @{ Ranura = 'p';    Fichero = '42p.png';      Medidas = '600x900' }
+        @{ Ranura = 'cap';  Fichero = '42.png';       Medidas = '460x215' }
+        @{ Ranura = 'hero'; Fichero = '42_hero.png';  Medidas = '1920x620' }
+        @{ Ranura = 'logo'; Fichero = '42_logo.png';  Medidas = '1000x500' }   # el logo, tal cual
+    ) {
+        $r = Set-CaratulaRanura -Ranura $Ranura -Origen $origen -GridDir $grid -AppId 42
+        $r.Ruta | Should -Be (Join-Path $grid $Fichero)
+        Get-Medidas $r.Ruta | Should -Be $Medidas
+    }
+
+    It 'con el icono de <IconoDe>, elegir <Ranura> rehace el icono: <Rehace>' -ForEach @(
+        @{ IconoDe = '';     Ranura = 'cap';  Rehace = $true;  Queda = 'cap' }
+        @{ IconoDe = '';     Ranura = 'hero'; Rehace = $false; Queda = '' }
+        @{ IconoDe = 'cap';  Ranura = 'p';    Rehace = $true;  Queda = 'p' }
+        @{ IconoDe = 'p';    Ranura = 'p';    Rehace = $true;  Queda = 'p' }
+        @{ IconoDe = 'p';    Ranura = 'cap';  Rehace = $false; Queda = 'p' }
+        @{ IconoDe = 'p';    Ranura = 'logo'; Rehace = $true;  Queda = 'logo' }
+        @{ IconoDe = 'logo'; Ranura = 'p';    Rehace = $false; Queda = 'logo' }
+    ) {
+        $r = Set-CaratulaRanura -Ranura $Ranura -Origen $origen -GridDir $grid -AppId 42 -IconoDe $IconoDe
+        $r.IconoDe | Should -Be $Queda
+        $icono = Join-Path $grid '42_icon.png'
+        if ($Rehace) {
+            $r.Icono | Should -Be $icono
+            Get-Medidas $icono | Should -Be '256x256'
+        } else {
+            $r.Icono | Should -Be ''
+            Test-Path -LiteralPath $icono | Should -BeFalse
+        }
+    }
+
+    It 'una URL que devuelve la imagen vacía (como la portada rota de SteamGridDB) lanza diciéndolo' {
+        $vacio = Join-Path $TestDrive 'vacio.png'
+        [IO.File]::WriteAllBytes($vacio, [byte[]]@())
+        { Get-BytesDesdeUrl ([Uri]$vacio).AbsoluteUri } | Should -Throw '*vacía*'
+        { Get-BytesDesdeUrl ([Uri](Join-Path $TestDrive 'no-existe.png')).AbsoluteUri } | Should -Throw '*No he podido descargar*'
+        (Get-BytesDesdeUrl ([Uri]$origen).AbsoluteUri).Length | Should -Be (Get-Item -LiteralPath $origen).Length
+    }
+
+    It 'lanza si la imagen no se puede leer, sin dejar nada a medias' {
+        $malo = Join-Path $TestDrive 'malo.png'
+        [IO.File]::WriteAllBytes($malo, [byte[]](1, 2, 3))
+        { Set-CaratulaRanura -Ranura 'p' -Origen $malo -GridDir $grid -AppId 42 } | Should -Throw
+        @(Get-ChildItem -LiteralPath $grid).Count | Should -Be 0
     }
 }

@@ -98,6 +98,11 @@ if ($registroRotado) { Write-Registro "El registro anterior pasaba de 1 MB: se h
 . (Join-Path $Raiz 'lib\Fuentes.ps1')
 . (Join-Path $Raiz 'lib\Caratulas.ps1')
 . (Join-Path $Raiz 'lib\SteamCtl.ps1')
+. (Join-Path $Raiz 'lib\Tareas.ps1')
+
+# Lo que necesita New-CaratulasSteam en el runspace de "Preparar caratulas", que empieza vacio:
+# Config (la clave de SteamGridDB) y Fuentes (Get-LogoAppStore)
+$LibPreparar = @('Config.ps1', 'Fuentes.ps1', 'Caratulas.ps1') | ForEach-Object { Join-Path $Raiz "lib\$_" }
 
 # Busqueda de texto sin comodines: con -like un '[' en el filtro da error
 function Test-Contiene {
@@ -534,26 +539,44 @@ if (Test-Path -LiteralPath $icoApp) {
         <Button Name="BtnAnadir" Content="2. Añadir a Steam" IsEnabled="False" Background="#FF7A1418"/>
         <Button Name="BtnQuitar" Content="Quitar de Steam" IsEnabled="False"/>
       </WrapPanel>
+      <!-- solo mientras se preparan las caratulas; lo que va haciendo sale en el registro -->
+      <ProgressBar Name="PrgPreparar" Height="3" Margin="0,-6,0,9" IsIndeterminate="True"
+                   Visibility="Collapsed" Background="#FF1E2127" Foreground="#FFDC1E23" BorderThickness="0"/>
 
-      <TextBlock Name="TxtOrigenArte" FontSize="11" Foreground="#FF8A909B" Margin="0,0,0,6"/>
-      <StackPanel Orientation="Horizontal">
-        <StackPanel Margin="0,0,14,0">
+      <TextBlock Name="TxtOrigenArte" FontSize="11" Foreground="#FF8A909B" Margin="0,0,0,6" TextWrapping="Wrap"/>
+      <!-- Con las caratulas preparadas, cada imagen (menos el icono, que sale de ellas) se pulsa
+           para elegir otra en la galeria. El Tag es el hueco: p, cap, hero o logo. -->
+      <WrapPanel>
+        <StackPanel Margin="0,0,14,10">
           <TextBlock Text="Portada 600x900" FontSize="10" Foreground="#FF6E747E"/>
-          <Border BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0">
+          <Border Name="BrdPortada" Tag="p" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0" Background="#FF111316">
             <Image Name="ImgPortada" Width="140" Height="210" Stretch="UniformToFill"/>
           </Border>
         </StackPanel>
-        <StackPanel>
+        <StackPanel Margin="0,0,14,10">
           <TextBlock Text="Cápsula 460x215" FontSize="10" Foreground="#FF6E747E"/>
-          <Border BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,10">
+          <Border Name="BrdCapsula" Tag="cap" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,10" Background="#FF111316"
+                  HorizontalAlignment="Left">
             <Image Name="ImgCapsula" Width="195" Height="91" Stretch="UniformToFill"/>
           </Border>
           <TextBlock Text="Hero 1920x620" FontSize="10" Foreground="#FF6E747E"/>
-          <Border BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0">
+          <Border Name="BrdHero" Tag="hero" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0" Background="#FF111316">
             <Image Name="ImgHero" Width="280" Height="90" Stretch="UniformToFill"/>
           </Border>
         </StackPanel>
-      </StackPanel>
+        <StackPanel Margin="0,0,0,10">
+          <TextBlock Text="Logo" FontSize="10" Foreground="#FF6E747E"/>
+          <Border Name="BrdLogo" Tag="logo" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,10" Background="#FF111316"
+                  HorizontalAlignment="Left">
+            <Image Name="ImgLogo" Width="150" Height="70" Margin="6" Stretch="Uniform"/>
+          </Border>
+          <TextBlock Text="Icono" FontSize="10" Foreground="#FF6E747E"/>
+          <Border BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0" Background="#FF111316"
+                  HorizontalAlignment="Left">
+            <Image Name="ImgIcono" Width="48" Height="48" Margin="4" Stretch="Uniform"/>
+          </Border>
+        </StackPanel>
+      </WrapPanel>
     </StackPanel>
     </ScrollViewer>
 
@@ -580,8 +603,9 @@ $win = [Windows.Markup.XamlReader]::Load($reader)
 
 $ctl = @{}
 foreach ($n in @('TxtVersion','TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
-                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','BtnQuitar','TxtOrigenArte',
-                 'ImgPortada','ImgCapsula','ImgHero','ChkBigPicture','ChkReemplazar','TxtLog')) {
+                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','BtnQuitar','PrgPreparar','TxtOrigenArte',
+                 'ImgPortada','ImgCapsula','ImgHero','ImgLogo','ImgIcono','BrdPortada','BrdCapsula','BrdHero','BrdLogo',
+                 'ChkBigPicture','ChkReemplazar','TxtLog')) {
     $ctl[$n] = $win.FindName($n)
 }
 
@@ -592,12 +616,25 @@ $script:Manuales = @()     # los elegidos con 'Examinar .exe...', que la busqued
 $script:Preparado = $null
 $script:CambiandoJuego = $false   # true mientras la seleccion rellena los cuadros de texto
 $script:Ocupado = $false          # true mientras hay una operacion larga en marcha
+$script:OcupadoBoton = $null      # el boton que ha cambiado de texto y el que tenia antes
+$script:Tarea = $null             # la preparacion en segundo plano que tiene la ventana ocupada
+# Todas las de segundo plano sin recoger: la de arriba y las canceladas que aun no han acabado
+$script:Tareas = New-Object System.Collections.ArrayList
+$script:DentroDeTareas = $false   # Update-Tareas en marcha: que no se meta otro tic
+$script:Galeria = $null           # la ventana de elegir imagen, mientras esta abierta
 
-function Add-Log {
+# Escribe en el registro y en la ventana SIN bombear mensajes. Es lo que se usa donde no se
+# puede dejar que WPF atienda nada en medio: el tic del reloj de las tareas y el cierre.
+function Write-LogVentana {
     param([string]$Texto)
     Write-Registro $Texto
     $ctl.TxtLog.AppendText($Texto + "`r`n")
     $ctl.TxtLog.ScrollToEnd()
+}
+
+function Add-Log {
+    param([string]$Texto)
+    Write-LogVentana $Texto
     Update-Interfaz
 }
 $LogGui = { param($m) Add-Log $m }
@@ -618,13 +655,47 @@ $ControlesInteractivos = @('BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','Bt
 # Un solo sitio decide que botones estan vivos. Antes lo hacia cada evento por su cuenta y no
 # se puede combinar con Invoke-Ocupado, que al terminar reactiva todo a la vez.
 function Update-Botones {
-    # en plena operacion todo esta desactivado; Invoke-Ocupado lo vuelve a llamar al terminar
-    if ($script:Ocupado) { return }
+    # En plena operacion todo esta desactivado; Exit-Ocupado lo vuelve a llamar al terminar.
+    # La excepcion: mientras se preparan las caratulas en segundo plano, el boton de preparar
+    # es el de cancelar.
+    if ($script:Ocupado) {
+        $ctl.BtnPreparar.IsEnabled = ($null -ne $script:Tarea)
+        return
+    }
     $ctl.BtnPreparar.IsEnabled = [bool]$script:Steam
     $ctl.BtnAnadir.IsEnabled   = ([bool]$script:Steam -and $null -ne $script:Preparado)
     # solo tiene sentido con un juego que ya tenga acceso directo (la marca 'YA EN STEAM')
     $sel = $ctl.LstJuegos.SelectedItem
     $ctl.BtnQuitar.IsEnabled   = ([bool]$script:Steam -and $null -ne $sel -and [bool]$sel.YaEnSteam)
+}
+
+# Marca la ventana como ocupada y desactiva los controles. Devuelve $false si ya lo estaba
+# (nunca anidado). $Boton cambia de texto mientras dure, para que se vea que esta trabajando.
+# Cada Enter-Ocupado que devuelva $true necesita su Exit-Ocupado: lo normal es Invoke-Ocupado,
+# que los empareja; por separado solo cuando lo largo sigue en segundo plano (Start-Preparar).
+function Enter-Ocupado {
+    param([string]$Boton = '', [string]$TextoOcupado = '')
+    if ($script:Ocupado) { return $false }
+    $script:Ocupado = $true
+    $script:OcupadoBoton = $null
+    if ($Boton -and $TextoOcupado) {
+        $script:OcupadoBoton = @{ Nombre = $Boton; Texto = $ctl[$Boton].Content }
+        $ctl[$Boton].Content = $TextoOcupado
+    }
+    foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $false }
+    Update-Botones
+    return $true
+}
+
+function Exit-Ocupado {
+    # el orden importa: la marca primero, para no dejarla puesta si algo falla al reactivar
+    $script:Ocupado = $false
+    if ($script:OcupadoBoton) {
+        $ctl[$script:OcupadoBoton.Nombre].Content = $script:OcupadoBoton.Texto
+        $script:OcupadoBoton = $null
+    }
+    foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $true }
+    Update-Botones
 }
 
 # Envoltorio de toda operacion larga lanzada desde un evento. Add-Log llama a Update-Interfaz,
@@ -633,28 +704,12 @@ function Update-Botones {
 function Invoke-Ocupado {
     param(
         [Parameter(Mandatory)][scriptblock]$Accion,
-        # Nombre del boton que mientras dura la operacion cambia de texto, para que se vea que
-        # esta trabajando y no colgado: todo va en el hilo de la UI y las descargas de imagenes
-        # dejan la ventana sin responder un buen rato.
         [string]$Boton = '',
         [string]$TextoOcupado = ''
     )
-    if ($script:Ocupado) { return }          # nunca anidado
-    $script:Ocupado = $true
-    $textoAntes = $null
-    if ($Boton -and $TextoOcupado) {
-        $textoAntes = $ctl[$Boton].Content
-        $ctl[$Boton].Content = $TextoOcupado
-    }
-    foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $false }
+    if (-not (Enter-Ocupado -Boton $Boton -TextoOcupado $TextoOcupado)) { return }
     try { & $Accion }
-    finally {
-        # el orden importa: la marca primero, para no dejarla puesta si algo falla al reactivar
-        $script:Ocupado = $false
-        if ($null -ne $textoAntes) { $ctl[$Boton].Content = $textoAntes }
-        foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $true }
-        Update-Botones
-    }
+    finally { Exit-Ocupado }
 }
 
 function Get-ImagenSegura {
@@ -710,10 +765,40 @@ function Update-Deteccion {
   }
 }
 
+# Los huecos de la vista previa: su imagen, su recuadro (el que se pulsa) y como se llaman
+$HuecosVista = [ordered]@{
+    p    = @{ Img = 'ImgPortada'; Borde = 'BrdPortada'; Nombre = 'portada' }
+    cap  = @{ Img = 'ImgCapsula'; Borde = 'BrdCapsula'; Nombre = 'cápsula' }
+    hero = @{ Img = 'ImgHero';    Borde = 'BrdHero';    Nombre = 'hero' }
+    logo = @{ Img = 'ImgLogo';    Borde = 'BrdLogo';    Nombre = 'logo' }
+}
+
+# Pinta la vista previa con lo que haya en $script:Preparado (o la vacia si no hay nada).
+# Los recuadros solo parecen pulsables cuando hay algo preparado.
+function Update-VistaPrevia {
+    $p = $script:Preparado
+    foreach ($k in $HuecosVista.Keys) {
+        $h = $HuecosVista[$k]
+        $ruta = $null
+        if ($p) { $ruta = $p.Rutas[$k] }
+        $ctl[$h.Img].Source = Get-ImagenSegura $ruta
+        if ($p) {
+            $ctl[$h.Borde].Cursor = [Windows.Input.Cursors]::Hand
+            $ctl[$h.Borde].ToolTip = "Pulsa para elegir otra imagen de $($h.Nombre)"
+        } else {
+            $ctl[$h.Borde].Cursor = $null
+            $ctl[$h.Borde].ToolTip = $null
+        }
+    }
+    $icono = $null
+    if ($p) { $icono = $p.Rutas['icon'] }
+    $ctl.ImgIcono.Source = Get-ImagenSegura $icono
+}
+
 function Clear-Preview {
     $script:Preparado = $null
     Update-Botones
-    $ctl.ImgPortada.Source = $null; $ctl.ImgCapsula.Source = $null; $ctl.ImgHero.Source = $null
+    Update-VistaPrevia
     $ctl.TxtOrigenArte.Text = ''
 }
 
@@ -843,42 +928,443 @@ $ctl.TxtNombre.Add_TextChanged({
     if ($script:Preparado) { Clear-Preview; Add-Log 'El nombre ha cambiado: hay que preparar las carátulas otra vez.' }
 })
 
-# El cuerpo de los dos botones largos va en una funcion aparte para poder envolverlo en
-# Invoke-Ocupado. Ya no tocan IsEnabled: de eso se encarga Update-Botones.
-function Invoke-Preparar {
-    $j = $ctl.LstJuegos.SelectedItem
-    if (-not $j) { Add-Log 'Elige un juego de la lista.'; return }
-    $nombre = $ctl.TxtNombre.Text.Trim()
-    if (-not $nombre) { Add-Log 'El nombre no puede estar vacío.'; return }
+# --- trabajo en segundo plano ------------------------------------------
+# Las tareas de lib\Tareas.ps1 corren en otro runspace; este reloj, en el hilo de la UI, pasa
+# al registro lo que van contando y recoge las que acaban. Solo anda mientras haya alguna.
+$script:Reloj = New-Object Windows.Threading.DispatcherTimer
+$script:Reloj.Interval = [TimeSpan]::FromMilliseconds(100)
+$script:Reloj.Add_Tick({ Update-Tareas })
 
-    # Aviso antes de empezar: las imagenes se descargan en el hilo de la UI y la ventana se
-    # queda sin responder hasta que termina. Decirlo no lo arregla, pero evita que parezca
-    # que la aplicacion se ha colgado (el arreglo de verdad es sacarlo a un runspace).
-    Add-Log "Preparando carátulas de '$nombre'. Puede tardar hasta un minuto."
-    Add-Log 'Mientras descarga las imágenes la ventana no responderá. Es normal: espera.'
-
+function Update-Tareas {
+    # Lo que llama AlTerminar puede bombear mensajes (Add-Log) y con ello colar otro tic aqui
+    # dentro, que recogeria la misma tarea dos veces
+    if ($script:DentroDeTareas) { return }
+    $script:DentroDeTareas = $true
     try {
+        foreach ($t in @($script:Tareas)) {
+            $lineas = @(Get-TareaLineas $t)
+            $avisos = @(Get-TareaAvisos $t)
+            # lo que cuente una tarea cancelada ya no viene a cuento
+            if (-not $t.Cancelada) {
+                foreach ($l in $lineas) { Write-LogVentana $l }
+                if ($t.Datos.AlAvisar) { foreach ($a in $avisos) { & $t.Datos.AlAvisar $t $a } }
+            }
+            if (-not $t.Handle.IsCompleted) { continue }
+            $script:Tareas.Remove($t)
+            $salida = Complete-TareaFondo $t
+            if (-not $salida.Cancelada -and $t.Datos.AlTerminar) { & $t.Datos.AlTerminar $t $salida }
+        }
+    } catch {
+        Write-LogVentana "ERROR recogiendo una tarea en segundo plano: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'recoger tarea' -Fallo $_
+    } finally {
+        $script:DentroDeTareas = $false
+        if (-not $script:Tareas.Count) { $script:Reloj.Stop() }
+    }
+}
+
+# "1. Preparar caratulas". Lo largo (buscar, descargar y componer las imagenes) va en segundo
+# plano: la ventana sigue respondiendo y el boton pasa a ser el de cancelar. Todo lo demas se
+# queda desactivado hasta que acabe, igual que con Invoke-Ocupado.
+function Start-Preparar {
+    if (-not (Enter-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Cancelar')) { return }
+    $lanzada = $false
+    try {
+        $j = $ctl.LstJuegos.SelectedItem
+        if (-not $j) { Add-Log 'Elige un juego de la lista.'; return }
+        $nombre = $ctl.TxtNombre.Text.Trim()
+        if (-not $nombre) { Add-Log 'El nombre no puede estar vacío.'; return }
+
+        # lo preparado antes para este juego se borra aqui abajo: que no quede a mano para anadir
+        Clear-Preview
         $j.LaunchOptions = $ctl.TxtOpciones.Text
         $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $j.Exe + '"') -AppName $nombre
-        $destino = Join-Path $TempDir "$appId"
-        if (Test-Path -LiteralPath $destino) { Remove-Item -LiteralPath $destino -Recurse -Force -ErrorAction SilentlyContinue }
-        Add-Log "AppId: $appId"
         $origenArte = [string]$ctl.CmbOrigenArte.SelectedItem.Tag
         if (-not $origenArte) { $origenArte = 'Automatico' }
-        $c = New-CaratulasSteam -Juego $j -AppId $appId -GridDir $destino -NombreFinal $nombre `
-                -OrigenArte $origenArte -Log $LogGui
-        $ctl.ImgPortada.Source = Get-ImagenSegura $c.Rutas['p']
-        $ctl.ImgCapsula.Source = Get-ImagenSegura $c.Rutas['cap']
-        $ctl.ImgHero.Source    = Get-ImagenSegura $c.Rutas['hero']
-        $ctl.TxtOrigenArte.Text = "Carátulas: $($c.Origen)"
-        $script:Preparado = @{ Juego = $j; Nombre = $nombre; AppId = $appId; Rutas = $c.Rutas }
-        Add-Log 'Listas. Si te gustan, pulsa "2. Añadir a Steam".'
+        # Cada preparacion en su carpeta: una cancelada sigue hasta que vuelve la descarga en
+        # curso y podria escribir encima de la siguiente del mismo appid. Las de antes de este
+        # appid ya no valen (la de una cancelada, si aun escribe, se poda en Remove-TempViejo).
+        foreach ($d in @(Get-ChildItem -LiteralPath $TempDir -Directory -ErrorAction SilentlyContinue)) {
+            if ($d.Name -eq "$appId" -or $d.Name.StartsWith("$appId-")) {
+                Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $destino = Join-Path $TempDir ('{0}-{1}' -f $appId, (Get-Date -Format 'HHmmssfff'))
+
+        Add-Log "Preparando carátulas de '$nombre' (AppId $appId). Puedes cancelarlo con el mismo botón."
+        # una copia del juego: el otro hilo no tiene por que compartir el objeto de la lista
+        $script:Tarea = Start-TareaFondo -Lib $LibPreparar -Parametros @{
+                Juego = $j.PSObject.Copy(); AppId = $appId; Destino = $destino; Nombre = $nombre; OrigenArte = $origenArte
+            } -Datos @{ Juego = $j; Nombre = $nombre; AppId = $appId; Carpeta = $destino
+                        TextoCancelado = 'Cancelado: no se ha preparado nada.'
+                        AlTerminar = { param($t, $s) Complete-Preparar $t $s } } `
+            -Cuerpo {
+                param($Juego, $AppId, $Destino, $Nombre, $OrigenArte, $Log)
+                New-CaratulasSteam -Juego $Juego -AppId $AppId -GridDir $Destino -NombreFinal $Nombre `
+                    -OrigenArte $OrigenArte -Log $Log
+            }
+        [void]$script:Tareas.Add($script:Tarea)
+        $script:Reloj.Start()
+        $lanzada = $true
+        $ctl.PrgPreparar.Visibility = 'Visible'
+        Update-Botones      # ahora que hay tarea, el boton de cancelar se enciende
     } catch {
         Add-Log "ERROR preparando carátulas: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'preparar carátulas' -Fallo $_
+    } finally {
+        if (-not $lanzada) { Exit-Ocupado }
     }
 }
-$ctl.BtnPreparar.Add_Click({ Invoke-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Preparando…' -Accion { Invoke-Preparar } })
+
+# Llega desde Update-Tareas cuando la preparacion acaba sin cancelar
+function Complete-Preparar {
+    param([hashtable]$Tarea, $Salida)
+    $script:Tarea = $null
+    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    try {
+        if ($Salida.Fallo) {
+            Write-LogVentana "ERROR preparando carátulas: $($Salida.Fallo.Exception.Message)"
+            Write-RegistroError -Contexto 'preparar carátulas' -Fallo $Salida.Fallo
+            return
+        }
+        $c = $Salida.Resultado
+        $d = $Tarea.Datos
+        # StoreId, SgdbId e IconoDe son para la galeria: no repetir busquedas y saber cuando
+        # rehacer el icono. Alternativas guarda lo ya buscado de cada hueco.
+        $script:Preparado = @{ Juego = $d.Juego; Nombre = $d.Nombre; AppId = $d.AppId; Rutas = $c.Rutas
+                               Carpeta = $d.Carpeta; StoreId = [string]$c.StoreId; SgdbId = [string]$c.SgdbId
+                               IconoDe = [string]$c.IconoDe; Alternativas = @{} }
+        Update-VistaPrevia
+        $ctl.TxtOrigenArte.Text = "Carátulas: $($c.Origen). Pulsa una imagen para elegir otra."
+        Write-LogVentana 'Listas. Si te gustan, pulsa "2. Añadir a Steam". Si no, pulsa la imagen que quieras cambiar.'
+    } catch {
+        Write-LogVentana "ERROR preparando carátulas: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'preparar carátulas' -Fallo $_
+    } finally {
+        Exit-Ocupado
+    }
+}
+
+# El boton de cancelar (BtnPreparar mientras hay $script:Tarea: preparar o cambiar una imagen
+# de la galeria). La ventana queda libre al momento; la tarea para en cuanto vuelva lo que este
+# haciendo (una descarga no se puede cortar) y Update-Tareas la recoge sin mas. Cada tarea
+# trae en Datos lo que hay que decir y, si hace falta, que hacer al cancelarla.
+# Sin bombear mensajes: se llama tambien desde el cierre de la ventana.
+function Stop-TareaVentana {
+    $t = $script:Tarea
+    if (-not $t) { return }
+    $script:Tarea = $null
+    foreach ($l in @(Get-TareaLineas $t)) { Write-LogVentana $l }
+    Stop-TareaFondo $t
+    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    Write-LogVentana $t.Datos.TextoCancelado
+    if ($t.Datos.AlCancelar) { & $t.Datos.AlCancelar $t }
+    Exit-Ocupado
+}
+
+$ctl.BtnPreparar.Add_Click({ if ($script:Tarea) { Stop-TareaVentana } else { Start-Preparar } })
+
+# --- galeria: elegir otra imagen para un hueco -------------------------
+# Con las caratulas preparadas, pulsar una imagen de la vista previa abre una ventana con la
+# actual y las demas que hay en la Store y en SteamGridDB. La busqueda y las miniaturas van en
+# segundo plano y aparecen segun llegan; lo encontrado se guarda en $script:Preparado para no
+# repetirlo al volver a abrir el mismo hueco. Elegir una la descarga entera y la deja con las
+# medidas de Steam en la carpeta de lo preparado (Set-CaratulaRanura), tambien en segundo plano.
+
+# Como se ven las miniaturas en la galeria (ancho, alto)
+$MiniGaleria = @{ p = @(120, 180); cap = @(230, 107); hero = @(300, 97); logo = @(200, 90) }
+$Brochas = New-Object Windows.Media.BrushConverter
+
+# Donde deja Save-Miniaturas la de la opcion $Indice (la busqueda y la galeria la calculan igual)
+function Get-RutaMiniatura {
+    param([hashtable]$Preparado, [string]$Ranura, [int]$Indice)
+    return (Join-Path (Join-Path $Preparado.Carpeta 'alternativas') ('{0}-{1}.img' -f $Ranura, $Indice))
+}
+
+# Una miniatura puede venir rota (o ser un formato que WPF no lee): se queda en blanco
+function Get-ImagenMiniatura {
+    param([string]$Ruta)
+    try { return (Get-ImagenSegura $Ruta) } catch { return $null }
+}
+
+function Get-TextoAlternativa {
+    param($Alternativa)
+    $partes = @($Alternativa.Origen)
+    if ($Alternativa.Detalle) { $partes += $Alternativa.Detalle }
+    if ($Alternativa.Ancho -gt 0) { $partes += ('{0}x{1}' -f $Alternativa.Ancho, $Alternativa.Alto) }
+    return ($partes -join ' · ')
+}
+
+# Anade una opcion a la galeria. $Indice -1 es la imagen actual (elegirla no cambia nada).
+function Add-OpcionGaleria {
+    param([int]$Indice, [string]$Texto, [string]$Ruta = '')
+    $g = $script:Galeria
+    $med = $MiniGaleria[$g.Ranura]
+    $img = New-Object Windows.Controls.Image
+    $img.Width = $med[0]; $img.Height = $med[1]
+    $img.Stretch = $(if ($g.Ranura -eq 'logo') { 'Uniform' } else { 'UniformToFill' })
+    if ($Ruta) { $img.Source = Get-ImagenMiniatura $Ruta }
+    $marco = New-Object Windows.Controls.Border
+    $marco.Background = $Brochas.ConvertFromString('#FF111316')
+    $marco.Child = $img
+    $txt = New-Object Windows.Controls.TextBlock
+    $txt.Text = $Texto
+    $txt.FontSize = 10
+    $txt.Foreground = $Brochas.ConvertFromString($(if ($Indice -lt 0) { '#FFE6E8EC' } else { '#FF8A909B' }))
+    $txt.Margin = New-Object Windows.Thickness(0, 4, 0, 0)
+    $txt.Width = $med[0]
+    $txt.TextTrimming = 'CharacterEllipsis'
+    $pila = New-Object Windows.Controls.StackPanel
+    [void]$pila.Children.Add($marco)
+    [void]$pila.Children.Add($txt)
+    $b = New-Object Windows.Controls.Button
+    $b.Style = $g.Ventana.FindResource('Opcion')
+    $b.Content = $pila
+    $b.Tag = $Indice
+    $b.ToolTip = $Texto
+    $b.Add_Click({ param($s, $e) $script:Galeria.Eleccion = [int]$s.Tag; $script:Galeria.Ventana.Close() })
+    [void]$g.Panel.Children.Add($b)
+    if ($Indice -ge 0) { $g.Imagenes[$Indice] = $img }
+}
+
+# Pone en la galeria la lista de opciones y las miniaturas que ya esten bajadas
+function Show-ListaGaleria {
+    param([object[]]$Lista)
+    $g = $script:Galeria
+    $g.Lista = @($Lista)
+    for ($i = 0; $i -lt $g.Lista.Count; $i++) {
+        $mini = Get-RutaMiniatura -Preparado $g.Preparado -Ranura $g.Ranura -Indice $i
+        if (-not (Test-Path -LiteralPath $mini)) { $mini = '' }
+        Add-OpcionGaleria -Indice $i -Texto (Get-TextoAlternativa $g.Lista[$i]) -Ruta $mini
+    }
+    if ($g.Lista.Count) {
+        $g.Estado.Text = "$($g.Lista.Count) opciones. Pulsa la que quieras usar."
+    } else {
+        $sinClave = -not (Get-SgdbClave)
+        $g.Estado.Text = 'No he encontrado otras imágenes para este hueco.' +
+            $(if ($sinClave) { ' Con una clave de SteamGridDB (en Ajustes) suele haber muchas más.' } else { '' })
+    }
+}
+
+# Llega desde Update-Tareas con cada aviso de la busqueda: primero la lista y luego cada
+# miniatura segun se baja. Si la galeria ya no es la de esta tarea, no hay nada que pintar.
+function Receive-AvisoGaleria {
+    param([hashtable]$Tarea, $Aviso)
+    $g = $script:Galeria
+    if (-not $g -or $g.Tarea -ne $Tarea) { return }
+    if ($Aviso.Tipo -eq 'Lista') {
+        Show-ListaGaleria @($Aviso.Lista)
+        if ($g.Lista.Count) { $g.Estado.Text = "$($g.Lista.Count) opciones; las miniaturas van llegando. Pulsa la que quieras usar." }
+    } elseif ($Aviso.Tipo -eq 'Mini') {
+        $img = $g.Imagenes[[int]$Aviso.Indice]
+        if ($img) { $img.Source = Get-ImagenMiniatura ([string]$Aviso.Ruta) }
+    }
+}
+
+# Fin de la busqueda: se guarda lo encontrado para la proxima vez (en lo preparado de cuando
+# se lanzo, que es de quien son las miniaturas)
+function Complete-Galeria {
+    param([hashtable]$Tarea, $Salida)
+    $d = $Tarea.Datos
+    $g = $script:Galeria
+    $mia = ($g -and $g.Tarea -eq $Tarea)
+    if ($mia) { $g.Tarea = $null; $g.Progreso.Visibility = 'Collapsed' }
+    if ($Salida.Fallo) {
+        Write-LogVentana "ERROR buscando otras imágenes: $($Salida.Fallo.Exception.Message)"
+        Write-RegistroError -Contexto 'galería de carátulas' -Fallo $Salida.Fallo
+        if ($mia) { $g.Estado.Text = 'La búsqueda ha fallado (el detalle está en el registro).' }
+        return
+    }
+    $r = $Salida.Resultado
+    $d.Preparado.Alternativas[$d.Ranura] = @{ Lista = @($r.Lista) }
+    if ($r.SgdbId) { $d.Preparado.SgdbId = [string]$r.SgdbId }
+    if ($mia -and $g.Lista.Count) { $g.Estado.Text = "$($g.Lista.Count) opciones. Pulsa la que quieras usar." }
+    Write-LogVentana "  $(@($r.Lista).Count) opciones para $($HuecosVista[$d.Ranura].Nombre)."
+}
+
+function Show-Galeria {
+    param([string]$Ranura)
+    $p = $script:Preparado
+    if (-not $p -or $script:Ocupado -or $script:Galeria) { return }
+    [xml]$xamlGaleria = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="980" Height="680" MinWidth="560" MinHeight="400"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="#FF15171B">
+  <Window.Resources>
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#FF262A31"/>
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="BorderBrush" Value="#FF3A3F49"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+    <!-- cada opcion: sin la plantilla del tema, que al pasar el raton pinta el fondo de azul claro -->
+    <Style x:Key="Opcion" TargetType="Button">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Margin" Value="0,0,10,10"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Name="Bd" Background="#FF1E2127" BorderBrush="#FF3A3F49" BorderThickness="1" Padding="6">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="BorderBrush" Value="#FFDC1E23"/>
+                <Setter TargetName="Bd" Property="Background" Value="#FF2E3440"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock Name="TxtTitulo" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+    <TextBlock Name="TxtEstado" Grid.Row="1" FontSize="11" Foreground="#FF8A909B" Margin="0,4,0,6" TextWrapping="Wrap"/>
+    <ProgressBar Name="PrgGaleria" Grid.Row="2" Height="3" Margin="0,0,0,10" IsIndeterminate="True"
+                 Background="#FF1E2127" Foreground="#FFDC1E23" BorderThickness="0"/>
+    <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <WrapPanel Name="PnlOpciones"/>
+    </ScrollViewer>
+    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+      <Button Name="BtnCerrar" Content="Cancelar" IsCancel="True"/>
+    </StackPanel>
+  </Grid>
+</Window>
+'@
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xamlGaleria))
+    $dlg.Owner = $win
+    if ($script:IconoVentana) { $dlg.Icon = $script:IconoVentana }
+    $nombreHueco = $HuecosVista[$Ranura].Nombre
+    $dlg.Title = "Elegir $nombreHueco - $($p.Nombre)"
+    $dlg.FindName('TxtTitulo').Text = "Otra imagen de $nombreHueco para «$($p.Nombre)»"
+    $script:Galeria = @{
+        Ventana = $dlg; Panel = $dlg.FindName('PnlOpciones'); Estado = $dlg.FindName('TxtEstado')
+        Progreso = $dlg.FindName('PrgGaleria'); Ranura = $Ranura; Preparado = $p
+        Lista = @(); Imagenes = @{}; Eleccion = $null; Tarea = $null
+    }
+    try {
+        $actual = $p.Rutas[$Ranura]
+        Add-OpcionGaleria -Indice -1 -Texto $(if ($actual) { 'La actual' } else { 'Sin logo (la actual)' }) -Ruta $actual
+
+        $cache = $p.Alternativas[$Ranura]
+        if ($cache) {
+            $script:Galeria.Progreso.Visibility = 'Collapsed'
+            Show-ListaGaleria $cache.Lista
+        } else {
+            $script:Galeria.Estado.Text = 'Buscando en la Store y en SteamGridDB...'
+            Add-Log "Buscando más imágenes de $nombreHueco para '$($p.Nombre)'..."
+            $t = Start-TareaFondo -Lib $LibPreparar -Parametros @{
+                    Ranura = $Ranura; Nombre = $p.Nombre; StoreId = $p.StoreId; SgdbId = $p.SgdbId
+                    Carpeta = (Join-Path $p.Carpeta 'alternativas')
+                } -Datos @{ Preparado = $p; Ranura = $Ranura
+                            AlAvisar   = { param($t, $a) Receive-AvisoGaleria $t $a }
+                            AlTerminar = { param($t, $s) Complete-Galeria $t $s } } `
+                -Cuerpo {
+                    param($Ranura, $Nombre, $StoreId, $SgdbId, $Carpeta, $Log, $Aviso)
+                    $r = Get-Alternativas -Ranura $Ranura -Nombre $Nombre -StoreId $StoreId -SgdbId $SgdbId -Log $Log
+                    & $Aviso ([pscustomobject]@{ Tipo = 'Lista'; Lista = $r.Lista }) | Out-Null
+                    Save-Miniaturas -Lista $r.Lista -Carpeta $Carpeta -Prefijo $Ranura -Aviso $Aviso
+                    $r
+                }
+            $script:Galeria.Tarea = $t
+            [void]$script:Tareas.Add($t)
+            $script:Reloj.Start()
+        }
+        [void]$dlg.ShowDialog()
+    } finally {
+        # cerrada sin esperar a que acabe: lo que quede ya no se va a ver
+        if ($script:Galeria.Tarea) {
+            Stop-TareaFondo $script:Galeria.Tarea
+            Write-LogVentana '  búsqueda cancelada al cerrar la galería.'
+        }
+        $eleccion = $script:Galeria.Eleccion
+        $lista = $script:Galeria.Lista
+        $script:Galeria = $null
+    }
+    if ($null -ne $eleccion -and $eleccion -ge 0 -and $eleccion -lt $lista.Count) {
+        Start-AplicarAlternativa -Ranura $Ranura -Alternativa $lista[$eleccion]
+    }
+}
+
+# Descarga la elegida y la pone en su hueco. Se cancela con el mismo boton que preparar: hay
+# imagenes rotas en SteamGridDB que tardan ~30 s en llegar vacias.
+function Start-AplicarAlternativa {
+    param([string]$Ranura, $Alternativa)
+    $p = $script:Preparado
+    if (-not $p) { return }
+    if (-not (Enter-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Cancelar')) { return }
+    $lanzada = $false
+    try {
+        Add-Log "Nueva imagen de $($HuecosVista[$Ranura].Nombre): $(Get-TextoAlternativa $Alternativa). Descargando..."
+        $script:Tarea = Start-TareaFondo -Lib $LibPreparar -Parametros @{
+                Ranura = $Ranura; Origen = $Alternativa.Url; GridDir = $p.Carpeta; AppId = $p.AppId; IconoDe = $p.IconoDe
+            } -Datos @{ Preparado = $p; Alternativa = $Alternativa
+                        TextoCancelado = 'Cancelado: la imagen se queda como estaba.'
+                        # se vuelve a pintar lo que haya en disco, por si justo acabo de escribir
+                        AlCancelar = { param($t) if ($t.Datos.Preparado -eq $script:Preparado) { Update-VistaPrevia } }
+                        AlTerminar = { param($t, $s) Complete-AplicarAlternativa $t $s } } `
+            -Cuerpo {
+                param($Ranura, $Origen, $GridDir, $AppId, $IconoDe, $Log)
+                Set-CaratulaRanura -Ranura $Ranura -Origen $Origen -GridDir $GridDir -AppId $AppId -IconoDe $IconoDe -Log $Log
+            }
+        [void]$script:Tareas.Add($script:Tarea)
+        $script:Reloj.Start()
+        $lanzada = $true
+        $ctl.PrgPreparar.Visibility = 'Visible'
+        Update-Botones      # ahora que hay tarea, el boton de cancelar se enciende
+    } catch {
+        Add-Log "ERROR cambiando la imagen: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'cambiar imagen' -Fallo $_
+    } finally {
+        if (-not $lanzada) { Exit-Ocupado }
+    }
+}
+
+function Complete-AplicarAlternativa {
+    param([hashtable]$Tarea, $Salida)
+    $script:Tarea = $null
+    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    try {
+        if ($Salida.Fallo) {
+            Write-LogVentana "No he podido usar esa imagen: $($Salida.Fallo.Exception.Message) Elige otra."
+            Write-RegistroError -Contexto 'cambiar imagen' -Fallo $Salida.Fallo
+            return
+        }
+        $r = $Salida.Resultado
+        $p = $Tarea.Datos.Preparado
+        $p.Rutas[$r.Ranura] = $r.Ruta
+        if ($r.Icono) { $p.Rutas['icon'] = $r.Icono }
+        $p.IconoDe = $r.IconoDe
+        if ($p -eq $script:Preparado) {
+            Update-VistaPrevia
+            $ctl.TxtOrigenArte.Text = 'Carátulas: elegidas en parte a mano. Pulsa una imagen para elegir otra.'
+        }
+        Write-LogVentana "Hecho: nueva imagen de $($HuecosVista[$r.Ranura].Nombre). Se usará al pulsar ""2. Añadir a Steam""."
+    } catch {
+        Write-LogVentana "ERROR cambiando la imagen: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'cambiar imagen' -Fallo $_
+    } finally {
+        Exit-Ocupado
+    }
+}
+
+foreach ($k in $HuecosVista.Keys) {
+    $ctl[$HuecosVista[$k].Borde].Add_MouseLeftButtonUp({ param($s, $e) Show-Galeria -Ranura ([string]$s.Tag) })
+}
 
 function Invoke-Anadir {
     if (-not $script:Preparado) { return }
@@ -922,18 +1408,19 @@ function Invoke-Quitar {
 }
 $ctl.BtnQuitar.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitar' -TextoOcupado 'Quitando…' -Accion { Invoke-Quitar } })
 
-# "Preparar caratulas" deja cada juego en %TEMP%\VaporeraArcade\<appid>\ (~1,6 MB) y solo se
-# borraba al volver a preparar el mismo appid: lo preparado y no anadido, o lo de un nombre que
-# luego se cambio, se quedaba ahi para siempre. Lo preparado no sobrevive a la sesion, pero no
-# se borra todo: con dos ventanas abiertas, la segunda se llevaria lo que acaba de preparar la
-# primera. Solo carpetas con nombre de appid, por si alguien deja algo mas ahi.
+# "Preparar caratulas" deja cada juego en %TEMP%\VaporeraArcade\<appid>-<hora>\ (~1,6 MB) y
+# solo se borra al volver a preparar el mismo appid: lo preparado y no anadido, o lo de un
+# nombre que luego se cambio, se quedaba ahi para siempre. Lo preparado no sobrevive a la
+# sesion, pero no se borra todo: con dos ventanas abiertas, la segunda se llevaria lo que acaba
+# de preparar la primera. Solo carpetas con nombre de appid (hasta la 0.8 sin la hora), por si
+# alguien deja algo mas ahi.
 function Remove-TempViejo {
     param([int]$Horas = 24)
     if (-not (Test-Path -LiteralPath $TempDir)) { return }
     $limite = (Get-Date).AddHours(-$Horas)
     $n = 0
     foreach ($d in @(Get-ChildItem -LiteralPath $TempDir -Directory -ErrorAction SilentlyContinue)) {
-        if ($d.Name -notmatch '^\d+$' -or $d.LastWriteTime -gt $limite) { continue }
+        if ($d.Name -notmatch '^\d+(-\d+)?$' -or $d.LastWriteTime -gt $limite) { continue }
         try { Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction Stop; $n++ } catch { }
     }
     if ($n) { Write-Registro "Borradas $n carpetas de carátulas preparadas hace más de $Horas horas en $TempDir." }
@@ -957,12 +1444,13 @@ Update-Botones
 
 # Con una operacion en marcha Steam esta cerrado y el VDF puede estar a medio escribir, asi que
 # la X de la ventana tampoco vale: Update-Interfaz deja que WPF la atienda ahi en medio.
+# Preparar caratulas es otra cosa: solo escribe en %TEMP%, se cancela y se cierra.
+# Aqui nada de Add-Log: llamaria a Update-Interfaz estando ya dentro de una.
 $win.Add_Closing({
+    if ($script:Tarea) { Stop-TareaVentana; return }
     if ($script:Ocupado) {
         $_.Cancel = $true
-        # a mano, sin Add-Log: llamaria a Update-Interfaz estando ya dentro de una
-        $ctl.TxtLog.AppendText("Espera a que termine la operación en curso." + "`r`n")
-        $ctl.TxtLog.ScrollToEnd()
+        Write-LogVentana 'Espera a que termine la operación en curso.'
     }
 })
 $win.Add_ContentRendered({ Invoke-Ocupado { Update-Deteccion } })

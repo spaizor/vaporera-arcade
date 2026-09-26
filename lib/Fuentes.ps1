@@ -282,18 +282,17 @@ function Get-JuegosEpic {
 # ---------------------------------------------------------------------
 #  GOG Galaxy
 #
-#  PENDIENTE DE PROBAR CON UN JUEGO DE VERDAD (22-09-2026). Es el unico origen que no se ha
-#  verificado en una instalacion real: no hay GOG Galaxy en el PC de desarrollo, asi que esto
-#  esta probado solo contra claves de registro sinteticas. Nadie ha visto todavia un juego de
-#  GOG detectado, anadido y arrancado desde Steam.
-#  Cuando haya con que probar, mirar las dos cosas que no se pueden resolver a ciegas:
-#    - launchParam se copia TAL CUAL a LaunchOptions del VDF. Si GOG mete rutas entrecomilladas
-#      o argumentos con espacios, hay que ver si Steam los pasa igual o hay que reescribirlos.
-#    - Si workingDir es de fiar como carpeta de inicio del juego.
+#  Probado con juegos de verdad el 26-09-2026: detectados, anadidos, arrancados desde Steam y
+#  quitados. Cat Quest II (exe propio, launchParam vacio), Beneath a Steel Sky (ScummVM,
+#  '-c "..\beneath.ini" beneath') y Champions of Krynn (DOSBox, varios -conf entrecomillados
+#  y '-c "exit"'). launchParam va TAL CUAL a LaunchOptions y Steam lo pasa bien, comillas y
+#  rutas '..\' incluidas: son relativas a workingDir, que es la carpeta del emulador.
 # ---------------------------------------------------------------------
+# $Bases solo se cambia para probar.
 function Get-JuegosGog {
+    param([string[]]$Bases = @('HKLM:\SOFTWARE\WOW6432Node\GOG.com\Games','HKLM:\SOFTWARE\GOG.com\Games'))
     $res = @()
-    foreach ($base in @('HKLM:\SOFTWARE\WOW6432Node\GOG.com\Games','HKLM:\SOFTWARE\GOG.com\Games')) {
+    foreach ($base in $Bases) {
         foreach ($k in Get-ChildItem $base -ErrorAction SilentlyContinue) {
             $p = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
             if (-not $p.path -or -not $p.exe) { continue }
@@ -312,9 +311,19 @@ function Get-JuegosGog {
             # (los argumentos sin enlazar de la funcion) y no hay que pisarla.
             $parametros = ''
             if ($p.launchParam) { $parametros = ([string]$p.launchParam).Trim() }
+            # Los clasicos van por un emulador que GOG mete en la carpeta del juego: el exe del
+            # registro es el de DOSBox o ScummVM, y su icono no es el del juego. GOG deja el del
+            # juego al lado, con el id del juego, que es el nombre de la clave.
+            $icono = $exe
+            $ico = Join-Path $p.path ('goggame-' + $k.PSChildName + '.ico')
+            if (Test-Path -LiteralPath $ico -PathType Leaf) { $icono = $ico }
+            $detalle = 'Ejecutable directo del juego'
+            $leaf = Split-Path $exe -Leaf
+            if ($leaf -match '^dosbox') { $detalle = 'Va por DOSBox, con los argumentos de GOG' }
+            elseif ($leaf -match '^scummvm') { $detalle = 'Va por ScummVM, con los argumentos de GOG' }
             $res += New-Juego -Nombre $p.gameName -Fuente 'GOG' `
-                    -Exe $exe -StartDir ($trabajo.TrimEnd('\') + '\') -LaunchOptions $parametros -Icono $exe `
-                    -Carpeta $p.path -Detalle 'Ejecutable directo del juego'
+                    -Exe $exe -StartDir ($trabajo.TrimEnd('\') + '\') -LaunchOptions $parametros -Icono $icono `
+                    -Carpeta $p.path -Detalle $detalle
         }
     }
     return $res

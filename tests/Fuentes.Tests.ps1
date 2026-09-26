@@ -158,6 +158,81 @@ Describe 'Get-IconoUbisoft' {
     }
 }
 
+Describe 'Get-JuegosGog' {
+    # Claves como las que deja GOG Galaxy (copiadas de Beneath a Steel Sky, Champions of Krynn
+    # y Cat Quest II), apuntando a ficheros vacios en TestDrive: aqui solo tienen que existir
+    BeforeAll {
+        $base = 'HKCU:\Software\VaporeraArcadeTests\' + [guid]::NewGuid().ToString() + '\Games'
+        $null = New-Item -Path $base -Force
+        function Set-JuegoGog([string]$id, [hashtable]$v) {
+            $k = New-Item -Path (Join-Path $base $id) -Force
+            foreach ($n in $v.Keys) { $null = New-ItemProperty -LiteralPath $k.PSPath -Name $n -Value $v[$n] }
+        }
+        function New-Vacio([string]$ruta) {
+            $null = [IO.Directory]::CreateDirectory((Split-Path $ruta -Parent))
+            [IO.File]::WriteAllBytes($ruta, [byte[]]@())
+        }
+        $bass = Join-Path $TestDrive 'Beneath a Steel Sky'
+        New-Vacio (Join-Path $bass 'ScummVM\scummvm.exe')
+        New-Vacio (Join-Path $bass 'goggame-1207658695.ico')
+        Set-JuegoGog '1207658695' @{ gameName = 'Beneath a Steel Sky'; path = $bass
+            exe = (Join-Path $bass 'ScummVM\scummvm.exe'); workingDir = (Join-Path $bass 'ScummVM')
+            launchParam = '-c "..\beneath.ini" beneath' }
+
+        $krynn = Join-Path $TestDrive 'Champions of Krynn'
+        New-Vacio (Join-Path $krynn 'DOSBOX\dosbox.exe')
+        New-Vacio (Join-Path $krynn 'goggame-1432722131.ico')
+        Set-JuegoGog '1432722131' @{ gameName = 'Champions of Krynn'; path = $krynn
+            exe = (Join-Path $krynn 'DOSBOX\dosbox.exe'); workingDir = (Join-Path $krynn 'DOSBOX')
+            launchParam = '-conf "..\dosboxChampionsOfKrynn.conf" -conf "..\dosboxChampionsOfKrynn_single.conf" -noconsole -c "exit" ' }
+
+        # sin su .ico, sin workingDir y con el exe relativo a la carpeta
+        $gato = Join-Path $TestDrive 'Cat Quest II'
+        New-Vacio (Join-Path $gato 'Cat Quest II.exe')
+        Set-JuegoGog '1958338581' @{ gameName = 'Cat Quest II'; path = $gato; exe = 'Cat Quest II.exe'; launchParam = '' }
+
+        # un juego desinstalado a medias: el exe ya no esta
+        Set-JuegoGog '1' @{ gameName = 'Borrado'; path = (Join-Path $TestDrive 'Borrado'); exe = (Join-Path $TestDrive 'Borrado\x.exe') }
+
+        $juegos = @(Get-JuegosGog -Bases @($base))
+        function Get-Juego([string]$nombre) { $juegos | Where-Object Nombre -eq $nombre | Select-Object -First 1 }
+    }
+    AfterAll {
+        Remove-Item -Path 'HKCU:\Software\VaporeraArcadeTests' -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'deja fuera el que ya no tiene exe' {
+        $juegos.Count | Should -Be 3
+        Get-Juego 'Borrado' | Should -BeNullOrEmpty
+    }
+    It 'ScummVM: exe, argumentos tal cual y carpeta de trabajo del registro' {
+        $j = Get-Juego 'Beneath a Steel Sky'
+        $j.Exe | Should -BeExactly (Join-Path $bass 'ScummVM\scummvm.exe')
+        $j.LaunchOptions | Should -BeExactly '-c "..\beneath.ini" beneath'
+        $j.StartDir | Should -BeExactly ((Join-Path $bass 'ScummVM') + '\')
+        $j.Detalle | Should -Match 'ScummVM'
+    }
+    It 'DOSBox: argumentos sin el espacio del final' {
+        $j = Get-Juego 'Champions of Krynn'
+        $j.LaunchOptions | Should -BeExactly '-conf "..\dosboxChampionsOfKrynn.conf" -conf "..\dosboxChampionsOfKrynn_single.conf" -noconsole -c "exit"'
+        $j.Detalle | Should -Match 'DOSBox'
+    }
+    It 'el icono es el goggame-<id>.ico del juego, no el del emulador' -ForEach @(
+        @{ Nombre = 'Beneath a Steel Sky'; Ico = 'goggame-1207658695.ico' }
+        @{ Nombre = 'Champions of Krynn';  Ico = 'goggame-1432722131.ico' }
+    ) {
+        (Get-Juego $Nombre).Icono | Should -BeExactly (Join-Path (Get-Juego $Nombre).Carpeta $Ico)
+    }
+    It 'sin .ico propio, el icono es el exe; sin workingDir, la carpeta del exe' {
+        $j = Get-Juego 'Cat Quest II'
+        $j.Exe | Should -BeExactly (Join-Path $gato 'Cat Quest II.exe')
+        $j.Icono | Should -BeExactly $j.Exe
+        $j.StartDir | Should -BeExactly ($gato + '\')
+        $j.LaunchOptions | Should -BeExactly ''
+        $j.Detalle | Should -Be 'Ejecutable directo del juego'
+    }
+}
+
 Describe 'Get-AnchoPng' {
     It 'lee el ancho de la cabecera' {
         $f = Join-Path $TestDrive 'ancho.png'

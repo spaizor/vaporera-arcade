@@ -19,7 +19,7 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   | Xbox / Game Pass | `<unidad>\XboxGames\*\Content\` | `gamelaunchhelper.exe`, el lanzador oficial |
   | Ubisoft Connect | Registro de Windows | `UbisoftConnect.exe` con `uplay://launch/<id>/0` |
   | Epic Games | Manifiestos de `ProgramData\Epic` | El ejecutable del juego |
-  | GOG ¹ | Registro de Windows | El ejecutable del juego, con los argumentos del registro |
+  | GOG | Registro de Windows | El ejecutable del juego (o su DOSBox/ScummVM), con los argumentos del registro |
   | Apps de la Microsoft Store | Menú Inicio | `explorer.exe shell:AppsFolder\<AUMID>` |
   | Programas recientes | Historial de ejecución de Windows | El ejecutable |
   | Cualquier otro | Botón *Examinar .exe…* | El ejecutable |
@@ -27,13 +27,10 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   Las apps de la Store y los programas recientes están desactivados por defecto, porque llenan
   la lista de cosas que no son juegos. Se activan con sus casillas.
 
-  ¹ **GOG está sin confirmar.** Es el único origen que no se ha podido probar con un juego
-  instalado de verdad, porque no había GOG Galaxy en el equipo donde se desarrolla. Debería
-  funcionar, pero si tienes juegos de GOG y algo no va, [abre una issue](https://github.com/spaizor/vaporera-arcade/issues).
-
 - **Carátulas automáticas.** Genera las imágenes que usa Steam: portada, cápsula, hero,
   logo e icono.
-- **Vista previa.** Puedes ver las carátulas antes de modificar nada en Steam.
+- **Vista previa.** Puedes ver las carátulas antes de modificar nada en Steam y, si alguna no
+  te gusta, elegir otra entre las que hay en la Microsoft Store y en SteamGridDB.
 - **Marca los juegos que ya están en Steam** y los muestra al final de la lista. Se consideran
   repetidos los que tengan el mismo nombre, o el mismo ejecutable con las mismas opciones.
 - **Copia de seguridad** de `shortcuts.vdf` antes de cada escritura.
@@ -95,8 +92,15 @@ powershell -ExecutionPolicy Bypass -STA -File .\VaporeraArcade.ps1
 
 1. Elige un juego de la lista. Puedes filtrarla con el buscador.
 2. Si quieres, cambia el nombre con el que aparecerá en Steam o las opciones de lanzamiento.
-3. Pulsa **1. Preparar carátulas** y revisa la vista previa.
-4. Pulsa **2. Añadir a Steam**. La aplicación cierra Steam, añade el juego, copia las imágenes
+3. Pulsa **1. Preparar carátulas** y revisa la vista previa. Mientras prepara, la ventana sigue
+   respondiendo y el mismo botón sirve para cancelar.
+4. Si quieres otra imagen, **pulsa la que quieras cambiar** (portada, cápsula, hero o logo; el
+   icono sale de ellas). Se abre una ventana con la actual y las demás que hay en la Store y en
+   SteamGridDB, que van apareciendo según se descargan; pulsa la que prefieras. La nueva se
+   descarga entera y sustituye a la de la vista previa (también se puede cancelar). Si cambias
+   el logo, el icono se rehace con él. Sin clave de SteamGridDB solo salen las de la Store, que
+   suelen ser pocas.
+5. Pulsa **2. Añadir a Steam**. La aplicación cierra Steam, añade el juego, copia las imágenes
    y vuelve a abrir Steam.
 
 Para deshacerlo, **Quitar de Steam** (ver *Quitar un juego*).
@@ -119,9 +123,10 @@ Por orden de preferencia:
    pulsa **Ajustes…** en la aplicación, pégala y usa **Probar** para comprobar que funciona.
    Se guarda en `%LOCALAPPDATA%\VaporeraArcade\config.json`, fuera de la carpeta de la aplicación.
 3. **Imágenes del propio juego.** Si no hay nada más, compone las carátulas con el fondo y el
-   logo que trae el juego instalado. En las apps de la Store usa el icono de la propia app, el
-   mismo que enseña Windows en el menú Inicio, con el nombre de la app al lado, porque el
-   icono solo no siempre basta para reconocerla.
+   logo que trae el juego instalado (en Ubisoft y GOG, su icono a 256×256; en los clásicos de
+   GOG, el del juego y no el de DOSBox o ScummVM). En las apps de la Store usa el icono de la
+   propia app, el mismo que enseña Windows en el menú Inicio, con el nombre de la app al lado,
+   porque el icono solo no siempre basta para reconocerla.
 
 Cuando se busca por el nombre, se compara el título de cada resultado con el del juego y se
 descarta el que no cuadre, en vez de quedarse con el primero: buscar el ejecutable `obs64` no
@@ -138,6 +143,9 @@ Con el desplegable **Origen de las carátulas** puedes forzar de dónde salen:
 | Solo Microsoft Store | No consulta SteamGridDB |
 | Solo SteamGridDB | Se salta el catálogo de la Store |
 | Solo imágenes del propio juego | No consulta nada por internet |
+
+Esto decide lo que sale al preparar. Después, en la vista previa, cada imagen se puede cambiar
+por otra de la Store o de SteamGridDB, sea cual sea el origen elegido.
 
 Imágenes que se generan en `Steam\userdata\<usuario>\config\grid\`:
 
@@ -181,7 +189,7 @@ carátulas.
 
 | Servicio | Cuándo | Qué se envía |
 |---|---|---|
-| `displaycatalog.mp.microsoft.com` | Al preparar carátulas de un juego con identificador de la Store | El identificador del producto |
+| `displaycatalog.mp.microsoft.com` | Al preparar carátulas de un juego con identificador de la Store, y al abrir la galería para elegir otra imagen | El identificador del producto |
 | `storeedgefd.dsx.mp.microsoft.com` | Al buscar en el catálogo de la Store por nombre | El nombre del juego |
 | `www.steamgriddb.com` | Solo si has configurado una clave de API | El nombre del juego y tu clave |
 
@@ -189,7 +197,8 @@ Después se descargan las imágenes desde las direcciones que devuelvan esos ser
 apuntan a sus propias redes de distribución. Ninguna petición lleva tu nombre de usuario, el
 del equipo ni ningún identificador que apunte a ti: el único dato fijo que se manda es la
 cabecera `MS-CV: VaporeraArcade.1`, un valor de trazas que es igual para todo el mundo. Con
-el origen de las carátulas en **Solo imágenes del propio juego** no se conecta a nada.
+el origen de las carátulas en **Solo imágenes del propio juego** no se conecta a nada, salvo
+que después pulses una imagen de la vista previa para elegir otra.
 
 **Qué se guarda en tu equipo:**
 
@@ -201,8 +210,9 @@ el origen de las carátulas en **Solo imágenes del propio juego** no se conecta
   en una incidencia de GitHub o de enviárselo a nadie. Cuando pasa de 1 MB, al abrir la
   aplicación se renombra a `vaporera-arcade.log.1` (sustituyendo al anterior) y se empieza uno
   nuevo. Puedes borrar los dos cuando quieras.
-- `%TEMP%\VaporeraArcade\<appid>\`: las imágenes a medio preparar de cada juego (~1,6 MB por
-  juego). Al abrir la aplicación se borran las que tengan más de un día.
+- `%TEMP%\VaporeraArcade\<appid>-<hora>\`: las imágenes a medio preparar de cada juego
+  (~1,6 MB por juego) y, si has abierto la galería, sus miniaturas (hasta unos 4 MB por cada
+  imagen que hayas querido cambiar). Al abrir la aplicación se borran las que tengan más de un día.
 - En la carpeta de Steam: el acceso directo en `shortcuts.vdf`, sus copias de seguridad
   `shortcuts.vdf.bak-<fecha>` y las imágenes de `userdata\<usuario>\config\grid\`.
 
@@ -255,7 +265,8 @@ Vaporera Arcade
     ├── Vdf.ps1                  lectura y escritura del formato VDF binario y cálculo del appid
     ├── Fuentes.ps1              detección de juegos según su origen
     ├── Caratulas.ps1            descarga y composición de carátulas
-    └── SteamCtl.ps1             localizar, cerrar y abrir Steam, y editar shortcuts.vdf
+    ├── SteamCtl.ps1             localizar, cerrar y abrir Steam, y editar shortcuts.vdf
+    └── Tareas.ps1               trabajo en segundo plano, para que la ventana no se congele
 ```
 
 Los ajustes y el registro de actividad se guardan fuera de la carpeta de la aplicación, en
@@ -277,8 +288,9 @@ junto al nombre en la cabecera de la ventana.
 El repositorio tiene una carpeta `tests\` (no va en el ZIP de las releases) con tests de
 [Pester 5](https://pester.dev) para lo delicado: la lectura y escritura de `shortcuts.vdf`
 byte a byte, el cálculo del appid, los duplicados, añadir y quitar accesos directos, la
-limpieza de carátulas y la comparación de títulos. No tocan Steam: trabajan sobre ficheros
-temporales. Se lanzan desde Windows PowerShell 5.1, en la carpeta del repositorio:
+limpieza de carátulas, la comparación de títulos y el trabajo en segundo plano. No tocan
+Steam: trabajan sobre ficheros temporales. Se lanzan desde Windows PowerShell 5.1, en la
+carpeta del repositorio:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-Tests.ps1 -Detalle
