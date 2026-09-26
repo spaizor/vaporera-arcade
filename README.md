@@ -301,6 +301,12 @@ instalar la versión 5.
 
 ## Historial de versiones
 
+- **0.9** (26-09-2026): galería en la vista previa para cambiar la portada, la cápsula, el
+  hero o el logo por otro de la Store o de SteamGridDB. La ventana ya no se congela al
+  preparar las carátulas y se puede cancelar. GOG probado con juegos reales, incluidos los
+  clásicos de DOSBox y ScummVM, que ahora llevan su propio icono. Icono de los juegos de
+  Ubisoft, icono y nombre en las carátulas de las apps de la Store, y el registro ya no crece
+  sin límite. Se quita el modo texto (`-Consola` y `-Juego`).
 - **0.8** (24-09-2026): icono propio en el acceso directo, la ventana y la barra de tareas.
   Los juegos de Ubisoft toman su nombre del registro de Windows en lugar del nombre de la
   carpeta, y las apps de la Store usan su propio icono en las carátulas cuando el catálogo no

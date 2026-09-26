@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 # Version de la aplicacion. Sale en el titulo de la ventana, junto al nombre de la cabecera, en
 # la primera linea del registro y en el historial del README.md: los cuatro tienen que ir
 # sincronizados. El XAML es una cadena literal y no interpola: la ventana la pone por codigo.
-$AppVersion = '0.8'
+$AppVersion = '0.9'
 
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TempDir = Join-Path $env:TEMP 'VaporeraArcade'
