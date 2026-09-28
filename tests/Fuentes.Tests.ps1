@@ -38,6 +38,64 @@ Describe 'Test-EpicEsJuego' {
     }
 }
 
+Describe 'Xbox: los DLC no salen como juegos' {
+    # Recortados de los reales: el episodio 1 de "The Freedom Chronicles" (DLC) y Wolfenstein II
+    BeforeAll {
+        $cfgDlc = @'
+<?xml version="1.0" encoding="utf-8"?>
+<Game configVersion="0">
+  <Identity Name="BethesdaSoftworks.TheAdventuresofGunslingerJoe" Publisher="CN=X" Version="1.0.0.0"/>
+  <ShellVisuals DefaultDisplayName="Wolfenstein II: The Freedom Chronicles Episode 1" StoreLogo="StoreAssets\Storelogo.png"/>
+  <AllowedProducts><AllowedProduct>9N26X2PMTWBT</AllowedProduct></AllowedProducts>
+  <StoreId>9NH24RH717SJ</StoreId>
+  <DesktopRegistration>
+    <MainPackageDependency Name="BethesdaSoftworks.WolfensteinIITheNewColossus-Game" />
+    <ProcessorArchitecture>x64</ProcessorArchitecture>
+  </DesktopRegistration>
+</Game>
+'@
+        $cfgJuego = @'
+<?xml version="1.0" encoding="utf-8"?>
+<Game configVersion="0">
+  <Identity Name="BethesdaSoftworks.WolfensteinIITheNewColossus-Game" Publisher="CN=X" Version="1.5.0.0"/>
+  <StoreId>9N26X2PMTWBT</StoreId>
+  <ExecutableList><Executable Name="NewColossus_x64vk.exe" Id="App"/></ExecutableList>
+  <ShellVisuals DefaultDisplayName="Wolfenstein II: The New Colossus" StoreLogo="StoreAssets\Storelogo.png"/>
+  <DesktopRegistration>
+    <DependencyList><Dependency Name="Microsoft.DirectXRuntime" MinVersion="9.29.952.0"/></DependencyList>
+    <ProcessorArchitecture>x64</ProcessorArchitecture>
+  </DesktopRegistration>
+</Game>
+'@
+        function New-CarpetaXbox([string]$raiz, [string]$nombre, [string]$cfg) {
+            $content = Join-Path (Join-Path $raiz $nombre) 'Content'
+            $null = New-Item -ItemType Directory -Path $content -Force
+            [IO.File]::WriteAllText((Join-Path $content 'gamelaunchhelper.exe'), 'x')
+            [IO.File]::WriteAllText((Join-Path $content 'MicrosoftGame.config'), $cfg)
+        }
+    }
+
+    It 'el config con MainPackageDependency es un DLC; el del juego no' {
+        Test-XboxEsDlc ([xml]$cfgDlc) | Should -BeTrue
+        Test-XboxEsDlc ([xml]$cfgJuego) | Should -BeFalse
+    }
+    It 'sin DesktopRegistration, o con él vacío, no es un DLC' {
+        Test-XboxEsDlc ([xml]'<Game><StoreId>1</StoreId></Game>') | Should -BeFalse
+        Test-XboxEsDlc ([xml]'<Game><DesktopRegistration/></Game>') | Should -BeFalse
+        Test-XboxEsDlc $null | Should -BeFalse
+    }
+    It 'Get-JuegosXbox se salta el DLC y deja el juego' {
+        $raiz = Join-Path $TestDrive 'XboxGames'
+        New-CarpetaXbox $raiz 'Wolfenstein II- The New Colossus' $cfgJuego
+        New-CarpetaXbox $raiz 'Wolfenstein II- The Freedom Chronicles Episode 1' $cfgDlc
+        Mock Get-RaicesXbox { $raiz }
+        $j = @(Get-JuegosXbox)
+        $j.Count | Should -Be 1
+        $j[0].Nombre | Should -BeExactly 'Wolfenstein II: The New Colossus'
+        $j[0].StoreId | Should -Be '9N26X2PMTWBT'
+    }
+}
+
 Describe 'Get-RaizDeGamingRoot' {
     It 'resuelve una ruta relativa a la unidad' {
         $u = Join-Path $TestDrive 'relativa'

@@ -1,5 +1,7 @@
 ﻿# Vaporera Arcade
 
+*[English version](README.en.md)*
+
 Añade a tu biblioteca de Steam los juegos de otras plataformas (Xbox Game Pass, Epic Games,
 GOG, Ubisoft Connect, Microsoft Store…) con un par de clics, y con sus carátulas.
 
@@ -27,10 +29,15 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   Las apps de la Store y los programas recientes están desactivados por defecto, porque llenan
   la lista de cosas que no son juegos. Se activan con sus casillas.
 
+  Los contenidos descargables (DLC) de Xbox / Game Pass, que Windows instala en su propia
+  carpeta como si fueran juegos, no salen en la lista: se abren desde el juego principal.
+
 - **Carátulas automáticas.** Genera las imágenes que usa Steam: portada, cápsula, hero,
   logo e icono.
 - **Vista previa.** Puedes ver las carátulas antes de modificar nada en Steam y, si alguna no
   te gusta, elegir otra entre las que hay en la Microsoft Store y en SteamGridDB.
+- **Varios juegos de una vez.** Marca sus casillas y añádelos o quítalos cerrando Steam una
+  sola vez.
 - **Marca los juegos que ya están en Steam** y los muestra al final de la lista. Se consideran
   repetidos los que tengan el mismo nombre, o el mismo ejecutable con las mismas opciones.
 - **Copia de seguridad** de `shortcuts.vdf` antes de cada escritura.
@@ -99,11 +106,26 @@ powershell -ExecutionPolicy Bypass -STA -File .\VaporeraArcade.ps1
    SteamGridDB, que van apareciendo según se descargan; pulsa la que prefieras. La nueva se
    descarga entera y sustituye a la de la vista previa (también se puede cancelar). Si cambias
    el logo, el icono se rehace con él. Sin clave de SteamGridDB solo salen las de la Store, que
-   suelen ser pocas.
+   suelen ser pocas. En esa misma ventana:
+   - **Cargar imagen…** usa una imagen tuya del disco (PNG, JPG, BMP o GIF), recortada a la
+     medida del hueco.
+   - **Elegir otro juego…** sirve cuando las carátulas son de otro juego, o no se ha
+     encontrado ninguno porque el nombre detectado no se parece al real. Busca en la Store y en
+     SteamGridDB con el nombre que escribas, y al elegir el bueno se preparan otra vez todas las
+     carátulas con él. El nombre con el que aparece en Steam no cambia.
 5. Pulsa **2. Añadir a Steam**. La aplicación cierra Steam, añade el juego, copia las imágenes
    y vuelve a abrir Steam.
 
 Para deshacerlo, **Quitar de Steam** (ver *Quitar un juego*).
+
+**Varios juegos a la vez.** Marca sus casillas en la lista y pulsa **Añadir (N)** o **Quitar
+(N)**, debajo de ella. Steam se cierra una sola vez para todos y `shortcuts.vdf` se escribe una
+vez, con una sola copia de seguridad. Al añadir, primero se preparan las carátulas de cada uno
+en segundo plano (se cancela con el mismo botón que *1. Preparar carátulas*); el juego que
+tengas en la vista previa usa las imágenes que hayas elegido en ella, y el seleccionado, el
+nombre y las opciones que hayas escrito. Los que ya están en Steam se saltan, salvo que marques
+*Reemplazar si ya existe*. Si uno falla, los demás siguen, y al final el registro muestra un
+resumen. Marcar un juego no lo selecciona.
 
 Casillas de la parte inferior:
 
@@ -133,7 +155,12 @@ descarta el que no cuadre, en vez de quedarse con el primero: buscar el ejecutab
 trae la carátula de otro programa, y buscar `Forza Horizon 5` no devuelve la de `Forza
 Horizon 6`. Lo descartado queda anotado en el registro. El precio es que un juego cuyo nombre
 detectado no se parece al real (un programa reciente sale con el nombre de su ejecutable) se
-queda con las imágenes que trae instaladas.
+queda con las imágenes que trae instaladas; para esos casos está **Elegir otro juego…** en la
+vista previa.
+
+El catálogo de la Store se consulta con el país y el idioma de la configuración regional de
+Windows, así que los títulos y el arte llegan en tu idioma. Si la Store no conoce ese país, se
+usa el de España.
 
 Con el desplegable **Origen de las carátulas** puedes forzar de dónde salen:
 
@@ -189,9 +216,9 @@ carátulas.
 
 | Servicio | Cuándo | Qué se envía |
 |---|---|---|
-| `displaycatalog.mp.microsoft.com` | Al preparar carátulas de un juego con identificador de la Store, y al abrir la galería para elegir otra imagen | El identificador del producto |
-| `storeedgefd.dsx.mp.microsoft.com` | Al buscar en el catálogo de la Store por nombre | El nombre del juego |
-| `www.steamgriddb.com` | Solo si has configurado una clave de API | El nombre del juego y tu clave |
+| `displaycatalog.mp.microsoft.com` | Al preparar carátulas de un juego con identificador de la Store, y al abrir la galería para elegir otra imagen | El identificador del producto, y el país y el idioma de Windows |
+| `storeedgefd.dsx.mp.microsoft.com` | Al buscar en el catálogo de la Store por nombre | El nombre del juego (o lo que escribas en *Elegir otro juego…*), y el país y el idioma de Windows |
+| `www.steamgriddb.com` | Solo si has configurado una clave de API | El nombre del juego (o lo que escribas en *Elegir otro juego…*) y tu clave |
 
 Después se descargan las imágenes desde las direcciones que devuelvan esos servicios, que
 apuntan a sus propias redes de distribución. Ninguna petición lleva tu nombre de usuario, el

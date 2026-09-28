@@ -347,6 +347,199 @@ function Invoke-QuitarJuego {
     }
 }
 
+# --- varios juegos con un solo reinicio de Steam ------------------------
+# Las mismas reglas que con uno (cerrar Steam, volver a mirar con el cerrado, copia de
+# seguridad, reabrir), pero Steam se cierra una vez y shortcuts.vdf se escribe una vez con
+# todos los cambios, hechos en memoria por Invoke-CambiosShortcuts. Un juego que no se puede
+# hacer no tumba a los demas: sale en el resumen.
+
+# "1 juego" o "3 juegos"
+function Get-CuentaJuegos { param([int]$N) if ($N -eq 1) { return '1 juego' } return "$N juegos" }
+
+# Por que no se ha hecho un cambio, para el resumen
+function Get-TextoMotivo {
+    param($Resultado)
+    switch ($Resultado.Motivo) {
+        'no-esta'   { return 'no estaba en Steam' }
+        'duplicado' { return 'ya estaba en Steam' }
+        'repetido'  { return 'repetido entre los marcados' }
+        default     { return "error: $($Resultado.Motivo)" }
+    }
+}
+
+# El detalle de lo que no se ha hecho y una linea con la cuenta: "3 añadidos, 1 ya estaba..."
+function Write-ResumenLote {
+    param([object[]]$Resultados, [string]$Hecho, [scriptblock]$Log = $null)
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } else { Write-Registro $m } }
+    $grupos = [ordered]@{}
+    foreach ($r in @($Resultados)) {
+        if ($r.Ok) { continue }
+        $t = Get-TextoMotivo $r
+        Registrar "  - $($r.Nombre): $t"
+        if ($t.StartsWith('error')) { $t = 'con error' }
+        if (-not $grupos.Contains($t)) { $grupos[$t] = 0 }
+        $grupos[$t]++
+    }
+    $partes = @("$(@($Resultados | Where-Object { $_.Ok }).Count) $Hecho")
+    foreach ($k in $grupos.Keys) { $partes += "$($grupos[$k]) $k" }
+    Registrar ("Resumen: " + ($partes -join ', ') + '.')
+}
+
+# Quita de Steam los juegos de la lista (los de la marca 'YA EN STEAM') y sus imagenes.
+# Devuelve un resultado por juego (Invoke-CambiosShortcuts), o $null si Steam no se cierra.
+# La confirmacion es cosa de quien llama.
+function Invoke-QuitarJuegos {
+    param(
+        [Parameter(Mandatory)][object[]]$Juegos,
+        [Parameter(Mandatory)]$Steam,
+        [switch]$AbrirBigPicture,
+        [switch]$NoReabrirSteam,
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } else { Write-Registro $m } }
+    Registrar "=== Quitar $(Get-CuentaJuegos @($Juegos).Count) ==="
+
+    $estabaAbierto = Test-SteamCorriendo
+    if (-not (Stop-SteamYEsperar -SteamExe $Steam.Exe -Log $Log)) {
+        Registrar 'ABORTADO: Steam no se ha cerrado. Ciérralo a mano y repite.'
+        return $null
+    }
+    $bak = $null
+    try {
+        # con Steam ya cerrado: al salir reescribe el fichero y las claves pueden cambiar
+        $root = Read-ShortcutsOVacio -Ruta $Steam.Shortcuts
+        $res = @(Invoke-CambiosShortcuts -Root $root -Bajas $Juegos)
+        $hechos = @($res | Where-Object { $_.Ok })
+        if ($hechos.Count) {
+            $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts -Log $Log
+            if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
+            Write-BinaryVdf -Root $root -Path $Steam.Shortcuts
+            foreach ($r in $hechos) {
+                Registrar "  quitado: $($r.NombreEnSteam)"
+                foreach ($a in @($r.Quitados)) {
+                    [void](Remove-CaratulasHuerfanas -RutaVdf $Steam.Shortcuts -GridDir $Steam.GridDir -AppId $a -Log $Log)
+                }
+            }
+        } else {
+            Registrar 'No había nada que quitar: no se ha tocado shortcuts.vdf.'
+        }
+        Write-ResumenLote -Resultados $res -Hecho 'quitados' -Log $Log
+        return $res
+    } catch {
+        if ($bak) { Registrar "Si shortcuts.vdf quedara mal, restaura la copia: $bak" }
+        throw
+    } finally {
+        # como con uno: al quitar, Steam se abre solo si estaba abierto
+        if (-not $NoReabrirSteam -and $estabaAbierto) {
+            Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log
+        }
+    }
+}
+
+# Anade varios juegos. $Lote: objetos con Juego, Nombre y Rutas (las imagenes ya preparadas,
+# como las de la vista previa; vacio si no se pudieron preparar: el juego se anade sin ellas,
+# que prepararlas ahora seria con Steam cerrado). Devuelve un resultado por juego
+# (Invoke-CambiosShortcuts, con CaratulasOk), o $null si Steam no se cierra.
+function Invoke-AnadirJuegos {
+    param(
+        [Parameter(Mandatory)][object[]]$Lote,
+        [Parameter(Mandatory)]$Steam,
+        [switch]$Reemplazar,
+        [switch]$AbrirBigPicture,
+        [switch]$NoReabrirSteam,
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } else { Write-Registro $m } }
+    $altas = @(foreach ($x in @($Lote)) {
+        [pscustomobject]@{ Nombre = $x.Nombre; Exe = $x.Juego.Exe; StartDir = $x.Juego.StartDir
+                           Icono = $x.Juego.Icono; LaunchOptions = $x.Juego.LaunchOptions; Lote = $x }
+    })
+    Registrar "=== Añadir $(Get-CuentaJuegos $altas.Count) ==="
+
+    # Antes de cerrar Steam, en una copia de lo leido: si no se puede anadir ninguno (ya estan
+    # todos), no se cierra
+    $prueba = @(Invoke-CambiosShortcuts -Root (Read-ShortcutsOVacio -Ruta $Steam.Shortcuts) -Altas $altas -Reemplazar:$Reemplazar)
+    if (-not @($prueba | Where-Object { $_.Ok }).Count) {
+        Registrar 'No hay nada que añadir: no se ha tocado Steam.'
+        Write-ResumenLote -Resultados $prueba -Hecho 'añadidos' -Log $Log
+        return $prueba
+    }
+
+    $estabaAbierto = Test-SteamCorriendo
+    if (-not (Stop-SteamYEsperar -SteamExe $Steam.Exe -Log $Log)) {
+        Registrar 'ABORTADO: Steam no se ha cerrado. Ciérralo a mano y repite.'
+        return $null
+    }
+    $bak = $null
+    $escrito = $false
+    $copiados = @()
+    try {
+        # Otra vez con Steam cerrado, y antes de copiar ninguna imagen: con un duplicado del
+        # mismo appid, copiarlas machacaria las del acceso directo que ya existe
+        $root = Read-ShortcutsOVacio -Ruta $Steam.Shortcuts
+        $res = @(Invoke-CambiosShortcuts -Root $root -Altas $altas -Reemplazar:$Reemplazar)
+        $hechos = @($res | Where-Object { $_.Ok })
+        foreach ($r in $res) { $r | Add-Member -NotePropertyName CaratulasOk -NotePropertyValue $false -Force }
+        if (-not $hechos.Count) {
+            Registrar 'Con Steam cerrado ya no queda nada que añadir: no se ha tocado shortcuts.vdf.'
+            Write-ResumenLote -Resultados $res -Hecho 'añadidos' -Log $Log
+            return $res
+        }
+        $bak = Backup-Shortcuts -Ruta $Steam.Shortcuts -Log $Log
+        if ($bak) { Registrar "Copia de seguridad: $(Split-Path $bak -Leaf)" }
+
+        # Las imagenes antes de escribir: el campo 'icon' de cada entrada apunta a su _icon.png
+        foreach ($r in $hechos) {
+            $x = $r.Elemento.Lote
+            if (-not $x.Rutas -or -not $x.Rutas.Count) {
+                Registrar "  $($r.Nombre): sin carátulas (no se han podido preparar); se añade igual."
+                continue
+            }
+            try {
+                Registrar "  $($r.Nombre):"
+                $arte = Invoke-Caratulas -Juego $x.Juego -Nombre $r.Nombre -AppId $r.AppId -Steam $Steam `
+                            -CaratulasListas $x.Rutas -Log $Log
+                $copiados += $r.AppId
+                if ($arte.Icono -and (Test-Path -LiteralPath $arte.Icono)) { $root['shortcuts'][$r.Clave]['icon'] = $arte.Icono }
+                $r.CaratulasOk = [bool]$arte.Ok
+                if (-not $arte.Ok) { Registrar "    faltan carátulas: $($arte.Faltan -join ', ')" }
+            } catch {
+                Registrar "  $($r.Nombre): las carátulas han fallado ($($_.Exception.Message)); se añade igual."
+                Write-RegistroError -Contexto 'carátulas de varios' -Fallo $_
+            }
+        }
+
+        Write-BinaryVdf -Root $root -Path $Steam.Shortcuts
+        $escrito = $true
+        foreach ($r in $hechos) {
+            Registrar "  añadido: $($r.Nombre)"
+            # al reemplazar una entrada de otro appid, sus imagenes ya no las usa nadie
+            if ($null -ne $r.AppIdAnterior -and $r.AppIdAnterior -ne $r.AppId) {
+                [void](Remove-CaratulasHuerfanas -RutaVdf $Steam.Shortcuts -GridDir $Steam.GridDir -AppId $r.AppIdAnterior -Log $Log)
+            }
+        }
+        $sinArte = @($hechos | Where-Object { -not $_.CaratulasOk }).Count
+        if ($sinArte) { Registrar "$sinArte se han añadido con las carátulas incompletas: Steam los mostrará sin imagen." }
+        Write-ResumenLote -Resultados $res -Hecho 'añadidos' -Log $Log
+        return $res
+    } catch {
+        if ($escrito) { Registrar 'shortcuts.vdf ya está escrito, pero algo ha fallado después (ver el error).' }
+        else {
+            Registrar 'Algo ha fallado antes de escribir shortcuts.vdf: no se ha añadido ninguno.'
+            # las imagenes ya copiadas se quedarian sin acceso directo
+            foreach ($a in $copiados) {
+                [void](Remove-CaratulasHuerfanas -RutaVdf $Steam.Shortcuts -GridDir $Steam.GridDir -AppId $a -Log $Log)
+            }
+        }
+        if ($bak) { Registrar "Si shortcuts.vdf quedara mal, restaura la copia: $bak" }
+        throw
+    } finally {
+        if (-not $NoReabrirSteam -and ($escrito -or $estabaAbierto)) {
+            Start-Steam -SteamExe $Steam.Exe -BigPicture:$AbrirBigPicture -Log $Log
+        }
+    }
+}
+
 # =====================================================================
 #  GUI (WPF)
 # =====================================================================
@@ -365,7 +558,7 @@ if (Test-Path -LiteralPath $icoApp) {
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Vaporera Arcade" Height="668" Width="1060"
+        Title="Vaporera Arcade" Height="800" Width="1120"
         MinHeight="480" MinWidth="820"
         WindowStartupLocation="CenterScreen" Background="#FF15171B">
   <Window.Resources>
@@ -485,6 +678,7 @@ if (Test-Path -LiteralPath $icoApp) {
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
       </Grid.RowDefinitions>
       <TextBlock Grid.Row="0" Text="Buscar por nombre" FontSize="11" Foreground="#FF8A909B" Margin="0,0,0,3"/>
       <TextBox Name="TxtBuscar" Grid.Row="1" Height="30" FontSize="14" Padding="6,4"
@@ -498,17 +692,32 @@ if (Test-Path -LiteralPath $icoApp) {
       </WrapPanel>
       <ListBox Name="LstJuegos" Grid.Row="3" Background="#FF1E2127" BorderBrush="#FF3A3F49"
                Foreground="#FFE6E8EC" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <!-- La casilla escribe en la propiedad Marcado del juego (binding de ida y vuelta con un
+             pscustomobject: funciona). Marcar no selecciona: la vista previa es del seleccionado. -->
         <ListBox.ItemTemplate>
           <DataTemplate>
-            <StackPanel Margin="2,4">
-              <TextBlock Text="{Binding Nombre}" FontSize="14"/>
-              <TextBlock FontSize="11" Foreground="#FF8A909B">
-                <Run Text="{Binding Fuente, Mode=OneWay}"/><Run Text="   "/><Run Text="{Binding Marca, Mode=OneWay}"/>
-              </TextBlock>
-            </StackPanel>
+            <DockPanel Margin="2,4">
+              <CheckBox DockPanel.Dock="Left" IsChecked="{Binding Marcado, Mode=TwoWay}" VerticalAlignment="Center"
+                        Margin="0,0,8,0" ToolTip="Marcar para añadir o quitar varios juegos de una vez"/>
+              <StackPanel>
+                <TextBlock Text="{Binding Nombre}" FontSize="14"/>
+                <TextBlock FontSize="11" Foreground="#FF8A909B">
+                  <Run Text="{Binding Fuente, Mode=OneWay}"/><Run Text="   "/><Run Text="{Binding Marca, Mode=OneWay}"/>
+                </TextBlock>
+              </StackPanel>
+            </DockPanel>
           </DataTemplate>
         </ListBox.ItemTemplate>
       </ListBox>
+      <!-- varios juegos con un solo reinicio de Steam -->
+      <StackPanel Grid.Row="4" Margin="0,8,0,0">
+        <TextBlock Name="TxtMarcados" FontSize="11" Foreground="#FF8A909B" TextWrapping="Wrap" Margin="0,0,0,6"/>
+        <WrapPanel>
+          <Button Name="BtnAnadirMarcados" Content="Añadir marcados" Padding="10,3" IsEnabled="False"/>
+          <Button Name="BtnQuitarMarcados" Content="Quitar marcados" Padding="10,3" IsEnabled="False"/>
+          <Button Name="BtnDesmarcar" Content="Desmarcar" Padding="10,3" IsEnabled="False"/>
+        </WrapPanel>
+      </StackPanel>
     </Grid>
 
     <!-- detalle -->
@@ -600,12 +809,17 @@ if (Test-Path -LiteralPath $icoApp) {
 
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $win = [Windows.Markup.XamlReader]::Load($reader)
+# Con 668 de alto la vista previa se cortaba (el hero y el icono, bajo la barra). Mas alta,
+# pero sin salirse de la pantalla: un portatil de 1080p al 125 % deja ~820 utiles
+$areaUtil = [System.Windows.SystemParameters]::WorkArea
+if ($win.Height -gt $areaUtil.Height) { $win.Height = $areaUtil.Height }
+if ($win.Width -gt $areaUtil.Width) { $win.Width = $areaUtil.Width }
 
 $ctl = @{}
 foreach ($n in @('TxtVersion','TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
                  'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','BtnQuitar','PrgPreparar','TxtOrigenArte',
                  'ImgPortada','ImgCapsula','ImgHero','ImgLogo','ImgIcono','BrdPortada','BrdCapsula','BrdHero','BrdLogo',
-                 'ChkBigPicture','ChkReemplazar','TxtLog')) {
+                 'ChkBigPicture','ChkReemplazar','TxtLog','TxtMarcados','BtnAnadirMarcados','BtnQuitarMarcados','BtnDesmarcar')) {
     $ctl[$n] = $win.FindName($n)
 }
 
@@ -622,6 +836,8 @@ $script:Tarea = $null             # la preparacion en segundo plano que tiene la
 $script:Tareas = New-Object System.Collections.ArrayList
 $script:DentroDeTareas = $false   # Update-Tareas en marcha: que no se meta otro tic
 $script:Galeria = $null           # la ventana de elegir imagen, mientras esta abierta
+$script:Visibles = New-Object System.Collections.ArrayList   # los de la lista con el filtro de ahora
+$script:Lote = $null              # los juegos de "Anadir marcados" mientras se preparan
 
 # Escribe en el registro y en la ventana SIN bombear mensajes. Es lo que se usa donde no se
 # puede dejar que WPF atienda nada en medio: el tic del reloj de las tareas y el cierre.
@@ -650,7 +866,8 @@ function Update-Interfaz {
 # lista: es lo unico que el usuario mira mientras espera, y desactivado se lee gris.
 $ControlesInteractivos = @('BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar',
                            'LstJuegos','TxtNombre','TxtOpciones','CmbOrigenArte','BtnPreparar','BtnAnadir',
-                           'BtnQuitar','ChkBigPicture','ChkReemplazar')
+                           'BtnQuitar','ChkBigPicture','ChkReemplazar','BtnAnadirMarcados','BtnQuitarMarcados',
+                           'BtnDesmarcar')
 
 # Un solo sitio decide que botones estan vivos. Antes lo hacia cada evento por su cuenta y no
 # se puede combinar con Invoke-Ocupado, que al terminar reactiva todo a la vez.
@@ -667,6 +884,34 @@ function Update-Botones {
     # solo tiene sentido con un juego que ya tenga acceso directo (la marca 'YA EN STEAM')
     $sel = $ctl.LstJuegos.SelectedItem
     $ctl.BtnQuitar.IsEnabled   = ([bool]$script:Steam -and $null -ne $sel -and [bool]$sel.YaEnSteam)
+
+    # los marcados: la cuenta va en el boton y en la linea de encima
+    $marc = @(Get-Marcados)
+    $enSteam = @($marc | Where-Object { $_.YaEnSteam }).Count
+    $ctl.BtnAnadirMarcados.Content = $(if ($marc.Count) { "Añadir ($($marc.Count))" } else { 'Añadir marcados' })
+    $ctl.BtnQuitarMarcados.Content = $(if ($enSteam) { "Quitar ($enSteam)" } else { 'Quitar marcados' })
+    $ctl.BtnAnadirMarcados.IsEnabled = ([bool]$script:Steam -and $marc.Count -gt 0)
+    $ctl.BtnQuitarMarcados.IsEnabled = ([bool]$script:Steam -and $enSteam -gt 0)
+    $ctl.BtnDesmarcar.IsEnabled      = ($marc.Count -gt 0)
+    if (-not $marc.Count) {
+        $ctl.TxtMarcados.Text = 'Marca las casillas para añadir o quitar varios juegos cerrando Steam una sola vez.'
+    } else {
+        $texto = "$($marc.Count) marcados"
+        if ($enSteam) { $texto += ", $enSteam ya en Steam" }
+        $ocultos = @($marc | Where-Object { -not $script:Visibles.Contains($_) }).Count
+        if ($ocultos) { $texto += " ($ocultos no se ven con el filtro)" }
+        $ctl.TxtMarcados.Text = "$texto."
+    }
+}
+
+function Get-Marcados { return @($script:Todos | Where-Object { $_ -and $_.Marcado }) }
+
+# El binding de un pscustomobject no avisa de los cambios hechos por codigo: Items.Refresh
+# vuelve a pintar las casillas sin perder la seleccion
+function Clear-Marcados {
+    foreach ($j in @($script:Todos)) { if ($j -and $j.Marcado) { $j.Marcado = $false } }
+    $ctl.LstJuegos.Items.Refresh()
+    Update-Botones
 }
 
 # Marca la ventana como ocupada y desactiva los controles. Devuelve $false si ya lo estaba
@@ -729,6 +974,10 @@ function Update-Lista {
     $vista = $script:Todos
     if ($filtro) { $vista = $vista | Where-Object { (Test-Contiene $_.Nombre $filtro) -or (Test-Contiene $_.Exe $filtro) } }
     $ctl.LstJuegos.ItemsSource = @($vista)
+    # para avisar de los marcados que el filtro esconde
+    $script:Visibles = New-Object System.Collections.ArrayList
+    foreach ($j in @($vista)) { if ($j) { [void]$script:Visibles.Add($j) } }
+    Update-Botones
 }
 
 # Rehace la lista y la marca 'YA EN STEAM' con el mismo criterio que usa la escritura del
@@ -741,6 +990,10 @@ function Update-Todos {
         $j.YaEnSteam = ($null -ne $dup)
         $marca = if ($j.YaEnSteam) { 'YA EN STEAM' } else { '' }
         $j | Add-Member -NotePropertyName Marca -NotePropertyValue $marca -Force
+        # la casilla de la lista; sin -Force, que no se pierda la de uno ya marcado
+        if ($null -eq $j.PSObject.Properties['Marcado']) {
+            $j | Add-Member -NotePropertyName Marcado -NotePropertyValue $false
+        }
     }
     # los de 'Examinar' van delante: el usuario los acaba de elegir y no salen de la busqueda
     $script:Todos = @($script:Manuales) +
@@ -750,10 +1003,18 @@ function Update-Todos {
 
 function Update-Deteccion {
   try {
+    # la busqueda crea los objetos de nuevo: las casillas marcadas se recuperan por exe y opciones
+    $marcados = @{}
+    foreach ($j in @(Get-Marcados)) { $marcados["$($j.Exe)|$($j.LaunchOptions)"] = $true }
     $ctl.LstJuegos.ItemsSource = $null
     Add-Log 'Buscando juegos instalados...'
     $script:Detectados = @(Get-TodosLosJuegos -IncluirRecientes:([bool]$ctl.ChkRecientes.IsChecked) `
                                               -IncluirApps:([bool]$ctl.ChkApps.IsChecked) -Log $LogGui)
+    foreach ($j in $script:Detectados) {
+        if ($marcados.ContainsKey("$($j.Exe)|$($j.LaunchOptions)")) {
+            $j | Add-Member -NotePropertyName Marcado -NotePropertyValue $true -Force
+        }
+    }
     Update-Todos
     $texto = "Detectados {0} títulos ({1} ya están en Steam)." -f
                 @($script:Detectados).Count, (@($script:Detectados | Where-Object YaEnSteam)).Count
@@ -966,21 +1227,36 @@ function Update-Tareas {
 # "1. Preparar caratulas". Lo largo (buscar, descargar y componer las imagenes) va en segundo
 # plano: la ventana sigue respondiendo y el boton pasa a ser el de cancelar. Todo lo demas se
 # queda desactivado hasta que acabe, igual que con Invoke-Ocupado.
+# $Elegido es el juego escogido a mano en la galeria (un resultado de Get-CandidatosJuego):
+# con el no se busca por el nombre, y manda sobre el origen elegido en la lista.
 function Start-Preparar {
+    param($Elegido = $null)
     if (-not (Enter-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Cancelar')) { return }
     $lanzada = $false
     try {
-        $j = $ctl.LstJuegos.SelectedItem
-        if (-not $j) { Add-Log 'Elige un juego de la lista.'; return }
-        $nombre = $ctl.TxtNombre.Text.Trim()
-        if (-not $nombre) { Add-Log 'El nombre no puede estar vacío.'; return }
+        if ($Elegido -and $script:Preparado) {
+            # El juego es el de la galeria, no el de la lista: Refrescar deja la lista sin
+            # seleccion y lo preparado sigue ahi (y antes esto se quedaba en 'Elige un juego')
+            $j = $script:Preparado.Juego
+            $nombre = $script:Preparado.Nombre
+        } else {
+            $j = $ctl.LstJuegos.SelectedItem
+            if (-not $j) { Add-Log 'Elige un juego de la lista.'; return }
+            $nombre = $ctl.TxtNombre.Text.Trim()
+            if (-not $nombre) { Add-Log 'El nombre no puede estar vacío.'; return }
+            $j.LaunchOptions = $ctl.TxtOpciones.Text
+        }
 
         # lo preparado antes para este juego se borra aqui abajo: que no quede a mano para anadir
         Clear-Preview
-        $j.LaunchOptions = $ctl.TxtOpciones.Text
         $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $j.Exe + '"') -AppName $nombre
         $origenArte = [string]$ctl.CmbOrigenArte.SelectedItem.Tag
         if (-not $origenArte) { $origenArte = 'Automatico' }
+        $storeElegido = ''; $sgdbElegido = ''
+        if ($Elegido) {
+            if ($Elegido.Fuente -eq 'SteamGridDB') { $sgdbElegido = [string]$Elegido.Id } else { $storeElegido = [string]$Elegido.Id }
+            $origenArte = 'Automatico'
+        }
         # Cada preparacion en su carpeta: una cancelada sigue hasta que vuelve la descarga en
         # curso y podria escribir encima de la siguiente del mismo appid. Las de antes de este
         # appid ya no valen (la de una cancelada, si aun escribe, se poda en Remove-TempViejo).
@@ -992,16 +1268,18 @@ function Start-Preparar {
         $destino = Join-Path $TempDir ('{0}-{1}' -f $appId, (Get-Date -Format 'HHmmssfff'))
 
         Add-Log "Preparando carátulas de '$nombre' (AppId $appId). Puedes cancelarlo con el mismo botón."
+        if ($Elegido) { Add-Log "  con el juego elegido a mano: '$($Elegido.Titulo)' ($($Elegido.Fuente))" }
         # una copia del juego: el otro hilo no tiene por que compartir el objeto de la lista
         $script:Tarea = Start-TareaFondo -Lib $LibPreparar -Parametros @{
                 Juego = $j.PSObject.Copy(); AppId = $appId; Destino = $destino; Nombre = $nombre; OrigenArte = $origenArte
-            } -Datos @{ Juego = $j; Nombre = $nombre; AppId = $appId; Carpeta = $destino
+                StoreIdElegido = $storeElegido; SgdbIdElegido = $sgdbElegido
+            } -Datos @{ Juego = $j; Nombre = $nombre; AppId = $appId; Carpeta = $destino; Elegido = $Elegido
                         TextoCancelado = 'Cancelado: no se ha preparado nada.'
                         AlTerminar = { param($t, $s) Complete-Preparar $t $s } } `
             -Cuerpo {
-                param($Juego, $AppId, $Destino, $Nombre, $OrigenArte, $Log)
+                param($Juego, $AppId, $Destino, $Nombre, $OrigenArte, $StoreIdElegido, $SgdbIdElegido, $Log)
                 New-CaratulasSteam -Juego $Juego -AppId $AppId -GridDir $Destino -NombreFinal $Nombre `
-                    -OrigenArte $OrigenArte -Log $Log
+                    -OrigenArte $OrigenArte -StoreIdElegido $StoreIdElegido -SgdbIdElegido $SgdbIdElegido -Log $Log
             }
         [void]$script:Tareas.Add($script:Tarea)
         $script:Reloj.Start()
@@ -1030,12 +1308,17 @@ function Complete-Preparar {
         $c = $Salida.Resultado
         $d = $Tarea.Datos
         # StoreId, SgdbId e IconoDe son para la galeria: no repetir busquedas y saber cuando
-        # rehacer el icono. Alternativas guarda lo ya buscado de cada hueco.
+        # rehacer el icono. Alternativas guarda lo ya buscado de cada hueco. Busqueda es con que
+        # se busca en SteamGridDB (el titulo del juego elegido a mano, si lo hay).
+        $busqueda = [string]$c.Busqueda
+        if (-not $busqueda) { $busqueda = $d.Nombre }
         $script:Preparado = @{ Juego = $d.Juego; Nombre = $d.Nombre; AppId = $d.AppId; Rutas = $c.Rutas
                                Carpeta = $d.Carpeta; StoreId = [string]$c.StoreId; SgdbId = [string]$c.SgdbId
-                               IconoDe = [string]$c.IconoDe; Alternativas = @{} }
+                               IconoDe = [string]$c.IconoDe; Alternativas = @{}; Busqueda = $busqueda }
         Update-VistaPrevia
-        $ctl.TxtOrigenArte.Text = "Carátulas: $($c.Origen). Pulsa una imagen para elegir otra."
+        $texto = "Carátulas: $($c.Origen)"
+        if ($d.Elegido) { $texto += ", del juego elegido a mano («$($d.Elegido.Titulo)»)" }
+        $ctl.TxtOrigenArte.Text = "$texto. Pulsa una imagen para elegir otra."
         Write-LogVentana 'Listas. Si te gustan, pulsa "2. Añadir a Steam". Si no, pulsa la imagen que quieras cambiar.'
     } catch {
         Write-LogVentana "ERROR preparando carátulas: $($_.Exception.Message)"
@@ -1141,7 +1424,7 @@ function Show-ListaGaleria {
         $g.Estado.Text = "$($g.Lista.Count) opciones. Pulsa la que quieras usar."
     } else {
         $sinClave = -not (Get-SgdbClave)
-        $g.Estado.Text = 'No he encontrado otras imágenes para este hueco.' +
+        $g.Estado.Text = 'No he encontrado otras imágenes para este hueco. Puedes cargar una tuya o, si es otro juego, elegir el bueno.' +
             $(if ($sinClave) { ' Con una clave de SteamGridDB (en Ajustes) suele haber muchas más.' } else { '' })
     }
 }
@@ -1180,6 +1463,173 @@ function Complete-Galeria {
     if ($r.SgdbId) { $d.Preparado.SgdbId = [string]$r.SgdbId }
     if ($mia -and $g.Lista.Count) { $g.Estado.Text = "$($g.Lista.Count) opciones. Pulsa la que quieras usar." }
     Write-LogVentana "  $(@($r.Lista).Count) opciones para $($HuecosVista[$d.Ranura].Nombre)."
+}
+
+# --- elegir el juego bueno ----------------------------------------------
+# Cuando la busqueda por el nombre acierta con otro juego (o con ninguno, como 'ACValhalla'),
+# desde la galeria se abre esta ventana: busca en la Store y en SteamGridDB con lo que se
+# escriba y deja elegir. Devuelve el elegido (un resultado de Get-CandidatosJuego) o $null, y
+# quien la abre prepara otra vez todas las caratulas con el. El nombre en Steam no cambia.
+$script:ElegirJuego = $null   # la ventana, mientras esta abierta
+
+function Start-BuscarJuego {
+    $e = $script:ElegirJuego
+    if (-not $e) { return }
+    $texto = $e.Busqueda.Text.Trim()
+    if (-not $texto) { $e.Estado.Text = 'Escribe el nombre del juego.'; return }
+    # la busqueda anterior, si no ha acabado, ya no viene a cuento
+    if ($e.Tarea) { Stop-TareaFondo $e.Tarea; $e.Tarea = $null }
+    $e.Lista.ItemsSource = $null
+    $e.Estado.Text = "Buscando «$texto» en la Store y en SteamGridDB..."
+    $e.Progreso.Visibility = 'Visible'
+    # sin Add-Log: bombearia mensajes en medio del evento
+    Write-LogVentana "Buscando juegos que se llamen '$texto'..."
+    $t = Start-TareaFondo -Lib $LibPreparar -Parametros @{ Nombre = $texto } `
+        -Datos @{ AlTerminar = { param($t, $s) Complete-BuscarJuego $t $s } } `
+        -Cuerpo {
+            param($Nombre, $Log)
+            Get-CandidatosJuego -Nombre $Nombre -Log $Log
+        }
+    $e.Tarea = $t
+    [void]$script:Tareas.Add($t)
+    $script:Reloj.Start()
+}
+
+# Llega desde Update-Tareas al acabar la busqueda. Si la ventana ya no esta, o se ha lanzado
+# otra busqueda despues, no hay nada que pintar.
+function Complete-BuscarJuego {
+    param([hashtable]$Tarea, $Salida)
+    $e = $script:ElegirJuego
+    if (-not $e -or $e.Tarea -ne $Tarea) { return }
+    $e.Tarea = $null
+    $e.Progreso.Visibility = 'Collapsed'
+    if ($Salida.Fallo) {
+        Write-RegistroError -Contexto 'buscar juego' -Fallo $Salida.Fallo
+        $e.Estado.Text = 'La búsqueda ha fallado (el detalle está en el registro).'
+        return
+    }
+    $p = $e.Preparado
+    $filas = @()
+    foreach ($c in @($Salida.Resultado)) {
+        if (-not $c) { continue }
+        $partes = @($c.Fuente)
+        if ($c.Detalle) { $partes += $c.Detalle }
+        $partes += ('{0} % de parecido' -f [int][Math]::Round([double]$c.Parecido * 100))
+        $idActual = $(if ($c.Fuente -eq 'SteamGridDB') { $p.SgdbId } else { $p.StoreId })
+        if ($idActual -and [string]$c.Id -eq $idActual) { $partes += 'EL DE AHORA' }
+        $filas += [pscustomobject]@{ Titulo = $c.Titulo; Linea = ($partes -join ' · '); Candidato = $c }
+    }
+    $e.Lista.ItemsSource = $filas
+    if ($filas.Count) {
+        $e.Estado.Text = "$($filas.Count) resultados. Elige el juego bueno y pulsa «Usar este juego»."
+    } else {
+        $e.Estado.Text = 'No he encontrado nada. Prueba con otro nombre (con el título en inglés suele haber más).' +
+            $(if (-not (Get-SgdbClave)) { ' Con una clave de SteamGridDB (en Ajustes) se busca también allí.' } else { '' })
+    }
+    Write-LogVentana "  $($filas.Count) resultados."
+}
+
+function Show-ElegirJuego {
+    param([Parameter(Mandatory)]$Duenio, [Parameter(Mandatory)][hashtable]$Preparado)
+    if ($script:ElegirJuego) { return $null }
+    [xml]$xamlElegir = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="640" Height="540" MinWidth="460" MinHeight="360"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="#FF15171B">
+  <Window.Resources>
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#FF262A31"/>
+      <Setter Property="Foreground" Value="#FFE6E8EC"/>
+      <Setter Property="BorderBrush" Value="#FF3A3F49"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock Name="TxtTitulo" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+    <TextBlock Grid.Row="1" FontSize="11" Foreground="#FF8A909B" Margin="0,4,0,10" TextWrapping="Wrap"
+               Text="Si las carátulas son de otro juego, búscalo y elige el bueno: se preparan otra vez todas con él. El nombre en Steam no cambia."/>
+    <Grid Grid.Row="2">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <TextBox Name="TxtBusqueda" Height="30" FontSize="14" Padding="6,4" VerticalContentAlignment="Center"
+               Background="#FF1E2127" Foreground="#FFE6E8EC" BorderBrush="#FF3A3F49"/>
+      <Button Name="BtnBuscar" Grid.Column="1" Content="Buscar" IsDefault="True" Margin="8,0,0,0" Padding="14,4"/>
+    </Grid>
+    <TextBlock Name="TxtEstado" Grid.Row="3" FontSize="11" Foreground="#FF8A909B" Margin="0,8,0,4" TextWrapping="Wrap"/>
+    <ProgressBar Name="PrgBuscar" Grid.Row="4" Height="3" Margin="0,0,0,6" IsIndeterminate="True"
+                 Visibility="Collapsed" Background="#FF1E2127" Foreground="#FFDC1E23" BorderThickness="0"/>
+    <ListBox Name="LstCandidatos" Grid.Row="5" Background="#FF1E2127" BorderBrush="#FF3A3F49"
+             Foreground="#FFE6E8EC" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+      <ListBox.ItemTemplate>
+        <DataTemplate>
+          <StackPanel Margin="2,4">
+            <TextBlock Text="{Binding Titulo}" FontSize="14" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Text="{Binding Linea}" FontSize="11" Foreground="#FF8A909B" TextTrimming="CharacterEllipsis"/>
+          </StackPanel>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+    <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+      <!-- siempre activo: desactivado, el tema lo pinta casi blanco -->
+      <Button Name="BtnUsar" Content="Usar este juego" Background="#FF7A1418" Margin="0,0,8,0"/>
+      <Button Name="BtnCancelarJuego" Content="Cancelar" IsCancel="True"/>
+    </StackPanel>
+  </Grid>
+</Window>
+'@
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xamlElegir))
+    $dlg.Owner = $Duenio
+    if ($script:IconoVentana) { $dlg.Icon = $script:IconoVentana }
+    $dlg.Title = "Elegir el juego - $($Preparado.Nombre)"
+    $dlg.FindName('TxtTitulo').Text = "¿De qué juego son las carátulas de «$($Preparado.Nombre)»?"
+    $script:ElegirJuego = @{
+        Ventana = $dlg; Busqueda = $dlg.FindName('TxtBusqueda'); Lista = $dlg.FindName('LstCandidatos')
+        Estado = $dlg.FindName('TxtEstado'); Progreso = $dlg.FindName('PrgBuscar'); Usar = $dlg.FindName('BtnUsar')
+        Preparado = $Preparado; Tarea = $null; Eleccion = $null
+    }
+    $script:ElegirJuego.Busqueda.Text = $Preparado.Busqueda
+    $dlg.FindName('BtnBuscar').Add_Click({ Start-BuscarJuego })
+    $usar = {
+        $sel = $script:ElegirJuego.Lista.SelectedItem
+        if (-not $sel) { $script:ElegirJuego.Estado.Text = 'Elige primero un juego de la lista.'; return }
+        $script:ElegirJuego.Eleccion = $sel.Candidato
+        $script:ElegirJuego.Ventana.Close()
+    }
+    $script:ElegirJuego.Usar.Add_Click($usar)
+    $script:ElegirJuego.Lista.Add_MouseDoubleClick($usar)
+    $dlg.Add_ContentRendered({
+        $script:ElegirJuego.Busqueda.Focus() | Out-Null
+        $script:ElegirJuego.Busqueda.SelectAll()
+    })
+    try {
+        Start-BuscarJuego
+        [void]$dlg.ShowDialog()
+    } finally {
+        if ($script:ElegirJuego.Tarea) {
+            Stop-TareaFondo $script:ElegirJuego.Tarea
+            Write-LogVentana '  búsqueda cancelada al cerrar la ventana.'
+        }
+        $eleccion = $script:ElegirJuego.Eleccion
+        $script:ElegirJuego = $null
+    }
+    return $eleccion
 }
 
 function Show-Galeria {
@@ -1239,9 +1689,15 @@ function Show-Galeria {
     <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <WrapPanel Name="PnlOpciones"/>
     </ScrollViewer>
-    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-      <Button Name="BtnCerrar" Content="Cancelar" IsCancel="True"/>
-    </StackPanel>
+    <Grid Grid.Row="4" Margin="0,10,0,0">
+      <Button Name="BtnOtroJuego" Content="Elegir otro juego..." HorizontalAlignment="Left"
+              ToolTip="Si las imágenes son de otro juego: búscalo, elige el bueno y se preparan otra vez todas"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button Name="BtnCargar" Content="Cargar imagen..." Margin="0,0,8,0"
+                ToolTip="Usar una imagen tuya (PNG, JPG, BMP o GIF). Se recorta a la medida del hueco."/>
+        <Button Name="BtnCerrar" Content="Cancelar" IsCancel="True"/>
+      </StackPanel>
+    </Grid>
   </Grid>
 </Window>
 '@
@@ -1251,11 +1707,28 @@ function Show-Galeria {
     $nombreHueco = $HuecosVista[$Ranura].Nombre
     $dlg.Title = "Elegir $nombreHueco - $($p.Nombre)"
     $dlg.FindName('TxtTitulo').Text = "Otra imagen de $nombreHueco para «$($p.Nombre)»"
+    # Eleccion es una de la lista; Fichero, una imagen del disco; Juego, el juego bueno
     $script:Galeria = @{
         Ventana = $dlg; Panel = $dlg.FindName('PnlOpciones'); Estado = $dlg.FindName('TxtEstado')
         Progreso = $dlg.FindName('PrgGaleria'); Ranura = $Ranura; Preparado = $p
-        Lista = @(); Imagenes = @{}; Eleccion = $null; Tarea = $null
+        Lista = @(); Imagenes = @{}; Eleccion = $null; Fichero = $null; Juego = $null; Tarea = $null
     }
+    $dlg.FindName('BtnCargar').Add_Click({
+        $f = New-Object Microsoft.Win32.OpenFileDialog
+        $f.Title = 'Elegir una imagen'
+        $f.Filter = 'Imágenes (*.png;*.jpg;*.jpeg;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.gif|Todos los ficheros (*.*)|*.*'
+        if ($f.ShowDialog($script:Galeria.Ventana)) {
+            $script:Galeria.Fichero = $f.FileName
+            $script:Galeria.Ventana.Close()
+        }
+    })
+    $dlg.FindName('BtnOtroJuego').Add_Click({
+        $c = Show-ElegirJuego -Duenio $script:Galeria.Ventana -Preparado $script:Galeria.Preparado
+        if ($c) {
+            $script:Galeria.Juego = $c
+            $script:Galeria.Ventana.Close()
+        }
+    })
     try {
         $actual = $p.Rutas[$Ranura]
         Add-OpcionGaleria -Indice -1 -Texto $(if ($actual) { 'La actual' } else { 'Sin logo (la actual)' }) -Ruta $actual
@@ -1268,7 +1741,7 @@ function Show-Galeria {
             $script:Galeria.Estado.Text = 'Buscando en la Store y en SteamGridDB...'
             Add-Log "Buscando más imágenes de $nombreHueco para '$($p.Nombre)'..."
             $t = Start-TareaFondo -Lib $LibPreparar -Parametros @{
-                    Ranura = $Ranura; Nombre = $p.Nombre; StoreId = $p.StoreId; SgdbId = $p.SgdbId
+                    Ranura = $Ranura; Nombre = $p.Busqueda; StoreId = $p.StoreId; SgdbId = $p.SgdbId
                     Carpeta = (Join-Path $p.Carpeta 'alternativas')
                 } -Datos @{ Preparado = $p; Ranura = $Ranura
                             AlAvisar   = { param($t, $a) Receive-AvisoGaleria $t $a }
@@ -1293,9 +1766,21 @@ function Show-Galeria {
         }
         $eleccion = $script:Galeria.Eleccion
         $lista = $script:Galeria.Lista
+        $fichero = $script:Galeria.Fichero
+        $juego = $script:Galeria.Juego
         $script:Galeria = $null
     }
-    if ($null -ne $eleccion -and $eleccion -ge 0 -and $eleccion -lt $lista.Count) {
+    if ($fichero) {
+        $alt = New-Alternativa -Origen 'Imagen propia' -Detalle ([IO.Path]::GetFileName($fichero)) -Url $fichero
+        Start-AplicarAlternativa -Ranura $Ranura -Alternativa $alt
+    } elseif ($juego) {
+        $idActual = $(if ($juego.Fuente -eq 'SteamGridDB') { $p.SgdbId } else { $p.StoreId })
+        if ($idActual -and [string]$juego.Id -eq $idActual) {
+            Add-Log "'$($juego.Titulo)' ya es el juego del que salen las carátulas: no cambio nada."
+        } else {
+            Start-Preparar -Elegido $juego
+        }
+    } elseif ($null -ne $eleccion -and $eleccion -ge 0 -and $eleccion -lt $lista.Count) {
         Start-AplicarAlternativa -Ranura $Ranura -Alternativa $lista[$eleccion]
     }
 }
@@ -1309,7 +1794,8 @@ function Start-AplicarAlternativa {
     if (-not (Enter-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Cancelar')) { return }
     $lanzada = $false
     try {
-        Add-Log "Nueva imagen de $($HuecosVista[$Ranura].Nombre): $(Get-TextoAlternativa $Alternativa). Descargando..."
+        $accion = $(if ($Alternativa.Url -match '^https?://') { 'Descargando...' } else { 'Cargando...' })
+        Add-Log "Nueva imagen de $($HuecosVista[$Ranura].Nombre): $(Get-TextoAlternativa $Alternativa). $accion"
         $script:Tarea = Start-TareaFondo -Lib $LibPreparar -Parametros @{
                 Ranura = $Ranura; Origen = $Alternativa.Url; GridDir = $p.Carpeta; AppId = $p.AppId; IconoDe = $p.IconoDe
             } -Datos @{ Preparado = $p; Alternativa = $Alternativa
@@ -1407,6 +1893,195 @@ function Invoke-Quitar {
     }
 }
 $ctl.BtnQuitar.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitar' -TextoOcupado 'Quitando…' -Accion { Invoke-Quitar } })
+
+# --- varios juegos: "Añadir (N)", "Quitar (N)" y "Desmarcar" ------------
+# Marcar un juego no lo selecciona. Al anadir, las caratulas de todos se preparan antes en
+# segundo plano (como "1. Preparar", y se cancela con ese mismo boton) y solo entonces se
+# cierra Steam, una vez. El seleccionado va con el nombre y las opciones de los cuadros de
+# texto, y el que tenga la vista previa preparada, con esas imagenes (lo elegido en la galeria).
+
+# La casilla ya ha escrito en Marcado cuando llega el Click: solo falta la cuenta
+$ctl.LstJuegos.AddHandler([Windows.Controls.Primitives.ButtonBase]::ClickEvent, [Windows.RoutedEventHandler]{
+    param($s, $e)
+    if ($e.OriginalSource -is [Windows.Controls.CheckBox]) { Update-Botones }
+})
+
+# Los nombres para las preguntas, sin pasarse de largo
+function Get-ListaNombres {
+    param([object[]]$Juegos, [int]$Max = 12)
+    $todos = @($Juegos)
+    $lineas = @($todos | Select-Object -First $Max | ForEach-Object { "  • $($_.Nombre)" })
+    if ($todos.Count -gt $Max) { $lineas += "  … y $($todos.Count - $Max) más" }
+    return ($lineas -join "`r`n")
+}
+
+function Start-AnadirMarcados {
+    if ($script:Ocupado) { return }
+    $marcados = @(Get-Marcados)
+    if (-not $marcados.Count) { return }
+    if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
+    $reemplazar = [bool]$ctl.ChkReemplazar.IsChecked
+    $yaEstan = @($marcados | Where-Object { $_.YaEnSteam }).Count
+    $texto = "¿Añadir $(Get-CuentaJuegos $marcados.Count) a Steam?`r`n`r`n$(Get-ListaNombres $marcados)`r`n`r`n" +
+             "Primero se preparan las carátulas de cada uno (se puede cancelar). Después Steam se " +
+             "cerrará una sola vez para añadirlos todos; antes se hace copia de shortcuts.vdf."
+    if ($yaEstan -eq 1) {
+        $texto += "`r`n`r`n1 ya está en Steam y " + $(if ($reemplazar) { 'se reemplazará.' } else { 'se saltará (marca «Reemplazar si ya existe» para sustituirlo).' })
+    } elseif ($yaEstan) {
+        $texto += "`r`n`r`n$yaEstan ya están en Steam y " + $(if ($reemplazar) { 'se reemplazarán.' } else { 'se saltarán (marca «Reemplazar si ya existe» para sustituirlos).' })
+    }
+    $resp = [Windows.MessageBox]::Show($win, $texto, 'Añadir a Steam', 'YesNo', 'Question', 'No')
+    if ($resp -ne 'Yes') { return }
+
+    if (-not (Enter-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Cancelar')) { return }
+    $lanzada = $false
+    try {
+        $sel = $ctl.LstJuegos.SelectedItem
+        $origenArte = [string]$ctl.CmbOrigenArte.SelectedItem.Tag
+        if (-not $origenArte) { $origenArte = 'Automatico' }
+        $hora = Get-Date -Format 'HHmmssfff'
+        $lote = @()
+        $pendientes = @()
+        for ($i = 0; $i -lt $marcados.Count; $i++) {
+            $j = $marcados[$i]
+            # una copia: al seleccionado se le ponen las opciones del cuadro sin tocar la lista
+            $juego = $j.PSObject.Copy()
+            $nombre = $j.Nombre
+            if ([object]::ReferenceEquals($j, $sel)) {
+                $t = $ctl.TxtNombre.Text.Trim()
+                if ($t) { $nombre = $t }
+                $juego.LaunchOptions = $ctl.TxtOpciones.Text
+            }
+            $x = [pscustomobject]@{ Item = $j; Juego = $juego; Nombre = $nombre; Rutas = $null }
+            $p = $script:Preparado
+            if ($p -and [object]::ReferenceEquals($p.Juego, $j) -and $p.Nombre -eq $nombre) {
+                $x.Rutas = $p.Rutas
+            } elseif ($j.YaEnSteam -and -not $reemplazar) {
+                # se va a saltar (Invoke-AnadirJuegos lo vuelve a mirar): no hace falta prepararlo
+            } else {
+                $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $juego.Exe + '"') -AppName $nombre
+                $pendientes += @{ Indice = $i; Juego = $juego; Nombre = $nombre; AppId = $appId
+                                  Destino = (Join-Path $TempDir ('{0}-{1}' -f $appId, $hora)) }
+            }
+            $lote += $x
+        }
+        $script:Lote = $lote
+        if (-not $pendientes.Count) {
+            $lanzada = $true      # Invoke-FinAnadirMarcados hace el Exit-Ocupado
+            Invoke-FinAnadirMarcados
+            return
+        }
+        Add-Log "Preparando las carátulas de $(Get-CuentaJuegos $pendientes.Count) antes de cerrar Steam. Puedes cancelarlo con el botón «Cancelar»."
+        $script:Tarea = Start-TareaFondo -Lib $LibPreparar -Parametros @{ Pendientes = $pendientes; OrigenArte = $origenArte } `
+            -Datos @{ TextoCancelado = 'Cancelado: no se ha añadido nada ni se ha tocado Steam.'
+                      AlCancelar = { param($t) $script:Lote = $null }
+                      AlTerminar = { param($t, $s) Complete-PrepararMarcados $t $s } } `
+            -Cuerpo {
+                param($Pendientes, $OrigenArte, $Log)
+                # uno que falle no para a los demas: se anadira sin caratulas
+                $total = @($Pendientes).Count
+                $n = 0
+                $salida = New-Object System.Collections.Generic.List[object]
+                foreach ($p in @($Pendientes)) {
+                    $n++
+                    & $Log "[$n/$total] $($p.Nombre)" | Out-Null
+                    try {
+                        $c = New-CaratulasSteam -Juego $p.Juego -AppId $p.AppId -GridDir $p.Destino -NombreFinal $p.Nombre `
+                                 -OrigenArte $OrigenArte -Log $Log
+                        $salida.Add([pscustomobject]@{ Indice = $p.Indice; Rutas = $c.Rutas })
+                    } catch {
+                        & $Log "  no se han podido preparar: $($_.Exception.Message)" | Out-Null
+                        $salida.Add([pscustomobject]@{ Indice = $p.Indice; Rutas = $null })
+                    }
+                }
+                $salida.ToArray()
+            }
+        [void]$script:Tareas.Add($script:Tarea)
+        $script:Reloj.Start()
+        $lanzada = $true
+        $ctl.PrgPreparar.Visibility = 'Visible'
+        Update-Botones      # ahora que hay tarea, el boton de cancelar se enciende
+    } catch {
+        Add-Log "ERROR preparando los marcados: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'preparar marcados' -Fallo $_
+    } finally {
+        if (-not $lanzada) { $script:Lote = $null; Exit-Ocupado }
+    }
+}
+
+# Llega desde Update-Tareas al acabar de preparar. Lo de Steam no se hace aqui dentro: tarda
+# (cerrarlo, hasta 40 s) y va con Add-Log, que bombea mensajes en pleno tic del reloj.
+function Complete-PrepararMarcados {
+    param([hashtable]$Tarea, $Salida)
+    $script:Tarea = $null
+    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    if ($Salida.Fallo) {
+        Write-LogVentana "ERROR preparando las carátulas: $($Salida.Fallo.Exception.Message) No se ha añadido nada."
+        Write-RegistroError -Contexto 'preparar marcados' -Fallo $Salida.Fallo
+        $script:Lote = $null
+        Exit-Ocupado
+        return
+    }
+    foreach ($r in @($Salida.Resultado)) {
+        if ($r -and $r.Rutas) { $script:Lote[[int]$r.Indice].Rutas = $r.Rutas }
+    }
+    [void]$win.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Background, [action]{ Invoke-FinAnadirMarcados })
+}
+
+# Con las caratulas listas: cerrar Steam una vez y anadirlos todos. Sigue ocupado desde
+# Start-AnadirMarcados y lo deja libre al terminar.
+function Invoke-FinAnadirMarcados {
+    $lote = $script:Lote
+    $script:Lote = $null
+    try {
+        if (-not $lote) { return }
+        $ctl.BtnPreparar.Content = 'Añadiendo…'   # Exit-Ocupado le devuelve su texto
+        # el mismo Reemplazar con el que se decidio que preparar (la casilla ya no se puede tocar)
+        $res = Invoke-AnadirJuegos -Lote $lote -Steam $script:Steam -Reemplazar:([bool]$ctl.ChkReemplazar.IsChecked) `
+                   -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) -Log $LogGui
+        if ($res) {
+            # se desmarcan los que ya estan en Steam; los que han fallado siguen marcados
+            foreach ($r in $res) {
+                if ($r.Ok -or $r.Motivo -eq 'duplicado' -or $r.Motivo -eq 'repetido') { $r.Elemento.Lote.Item.Marcado = $false }
+            }
+            if (@($res | Where-Object { $_.Ok }).Count) { Clear-Preview; Update-Deteccion }
+            else { $ctl.LstJuegos.Items.Refresh() }
+        }
+    } catch {
+        Add-Log "ERROR: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'añadir varios a Steam' -Fallo $_
+    } finally {
+        Exit-Ocupado
+    }
+}
+
+function Invoke-QuitarMarcados {
+    $marcados = @(Get-Marcados | Where-Object { $_.YaEnSteam })
+    if (-not $marcados.Count) { return }
+    if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
+    $texto = "¿Quitar $(Get-CuentaJuegos $marcados.Count) de la biblioteca de Steam?`r`n`r`n$(Get-ListaNombres $marcados)`r`n`r`n" +
+             "Se borran sus accesos directos y sus carátulas. Los juegos no se desinstalan.`r`n" +
+             "Si Steam está abierto se cerrará un momento, una sola vez; antes se hace copia de shortcuts.vdf."
+    $otros = @(Get-Marcados).Count - $marcados.Count
+    if ($otros) { $texto += "`r`n`r`nLos $otros marcados que no están en Steam no se tocan." }
+    $resp = [Windows.MessageBox]::Show($win, $texto, 'Quitar de Steam', 'YesNo', 'Question', 'No')
+    if ($resp -ne 'Yes') { return }
+    try {
+        $res = Invoke-QuitarJuegos -Juegos $marcados -Steam $script:Steam -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) -Log $LogGui
+        if ($res) {
+            foreach ($r in $res) { if ($r.Ok -or $r.Motivo -eq 'no-esta') { $r.Elemento.Marcado = $false } }
+            if (@($res | Where-Object { $_.Ok }).Count) { Clear-Preview; Update-Deteccion }
+            else { $ctl.LstJuegos.Items.Refresh() }
+        }
+    } catch {
+        Add-Log "ERROR: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'quitar varios de Steam' -Fallo $_
+    }
+}
+
+$ctl.BtnAnadirMarcados.Add_Click({ Start-AnadirMarcados })
+$ctl.BtnQuitarMarcados.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitarMarcados' -TextoOcupado 'Quitando…' -Accion { Invoke-QuitarMarcados } })
+$ctl.BtnDesmarcar.Add_Click({ if (-not $script:Ocupado) { Clear-Marcados } })
 
 # "Preparar caratulas" deja cada juego en %TEMP%\VaporeraArcade\<appid>-<hora>\ (~1,6 MB) y
 # solo se borra al volver a preparar el mismo appid: lo preparado y no anadido, o lo de un

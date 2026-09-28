@@ -323,6 +323,119 @@ function Remove-SteamShortcut {
     return $quitados
 }
 
+# ---------------------------------------------------------------------
+#  Varios cambios de una vez, en memoria. Steam lee shortcuts.vdf solo al arrancar y lo
+#  sobrescribe al salir: para N juegos se cierra una vez, se aplican todos aqui sobre lo leido
+#  y quien llama escribe una sola vez (Write-BinaryVdf). Aqui no se toca el disco.
+# ---------------------------------------------------------------------
+
+# El resultado de un cambio, con todo lo que puede necesitar quien llama
+function New-ResultadoCambio {
+    param([string]$Tipo, $Elemento)
+    return [pscustomobject]@{
+        Tipo = $Tipo; Nombre = [string]$Elemento.Nombre; Ok = $false; Motivo = ''
+        AppId = [uint32]0; AppIdAnterior = $null; Quitados = @(); NombreEnSteam = ''; Clave = ''
+        Elemento = $Elemento
+    }
+}
+
+# $Root es lo que devuelve Read-BinaryVdf y se modifica. $Bajas: objetos con Nombre, Exe y
+# LaunchOptions (los de la lista); de cada uno se quita la entrada con la que casa, con el mismo
+# criterio que la marca 'YA EN STEAM' (Find-ShortcutDuplicado). $Altas: objetos con Nombre,
+# Exe, StartDir, Icono y LaunchOptions. Primero las bajas, que renumeran las claves 0..n-1 como
+# Steam, y luego las altas. Cada cambio va por su cuenta: el que no se puede hacer, o falla, se
+# anota y los demas siguen. Devuelve un resultado por cambio, en el orden recibido: Ok, Motivo
+# ('no-esta', 'duplicado', 'repetido' entre los propios elegidos, o el mensaje del error),
+# AppId (el de la entrada nueva), AppIdAnterior (el de la reemplazada), Quitados (appid de la
+# baja), NombreEnSteam (el de la entrada quitada), Clave (la entrada escrita, para retocarla
+# despues: el icono) y Elemento (lo recibido).
+function Invoke-CambiosShortcuts {
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Root,
+        [object[]]$Bajas = @(),
+        [object[]]$Altas = @(),
+        [switch]$Reemplazar
+    )
+    if (-not $Root['shortcuts']) { $Root['shortcuts'] = [ordered]@{} }
+    $sc = $Root['shortcuts']
+    $resultados = New-Object System.Collections.Generic.List[object]
+
+    $quitar = @{}
+    foreach ($b in @($Bajas)) {
+        if (-not $b) { continue }
+        $r = New-ResultadoCambio -Tipo 'Baja' -Elemento $b
+        try {
+            # las ya quitadas en este lote no cuentan: dos marcados que casan con la misma
+            # entrada no la quitan "dos veces"
+            $restantes = @(ConvertTo-ShortcutInfo -Shortcuts $sc | Where-Object { -not $quitar.ContainsKey([string]$_.Indice) })
+            $clave = Find-ShortcutDuplicado -Existentes $restantes -Nombre $b.Nombre -Exe $b.Exe -LaunchOptions ([string]$b.LaunchOptions)
+            if ($null -eq $clave) { $r.Motivo = 'no-esta' }
+            else {
+                $info = $restantes | Where-Object { $_.Indice -eq $clave } | Select-Object -First 1
+                $quitar[[string]$clave] = $true
+                $r.Ok = $true; $r.Quitados = @($info.AppId); $r.NombreEnSteam = $info.Nombre; $r.Clave = [string]$clave
+            }
+        } catch { $r.Motivo = $_.Exception.Message }
+        $resultados.Add($r)
+    }
+    if ($quitar.Count) {
+        $nuevo = [ordered]@{}
+        $i = 0
+        foreach ($k in @($sc.Keys)) {
+            if ($quitar.ContainsKey([string]$k)) { continue }
+            $nuevo["$i"] = $sc[$k]; $i++
+        }
+        $Root['shortcuts'] = $nuevo
+        $sc = $nuevo
+    }
+
+    $hechas = @()   # las altas ya hechas en este lote, para ver los repetidos
+    foreach ($a in @($Altas)) {
+        if (-not $a) { continue }
+        $r = New-ResultadoCambio -Tipo 'Alta' -Elemento $a
+        try {
+            $opciones = [string]$a.LaunchOptions
+            $r.AppId = Get-SteamShortcutAppId -ExeQuoted ('"' + $a.Exe + '"') -AppName $a.Nombre
+            if ($null -ne (Find-ShortcutDuplicado -Existentes $hechas -Nombre $a.Nombre -Exe $a.Exe -LaunchOptions $opciones)) {
+                $r.Motivo = 'repetido'
+            } else {
+                $info = @(ConvertTo-ShortcutInfo -Shortcuts $sc)
+                $clave = Find-ShortcutDuplicado -Existentes $info -Nombre $a.Nombre -Exe $a.Exe -LaunchOptions $opciones
+                if ($null -ne $clave -and -not $Reemplazar) {
+                    $r.Motivo = 'duplicado'; $r.Clave = [string]$clave
+                } else {
+                    $entrada = New-EntradaShortcut -AppId $r.AppId -Nombre $a.Nombre -Exe $a.Exe -StartDir $a.StartDir `
+                                   -Icono ([string]$a.Icono) -LaunchOptions $opciones
+                    if ($null -ne $clave) {
+                        # las claves son texto: con un entero el [ordered] indexa por posicion
+                        $r.AppIdAnterior = ($info | Where-Object { $_.Indice -eq $clave } | Select-Object -First 1).AppId
+                        $sc[[string]$clave] = $entrada
+                        $r.Clave = [string]$clave
+                    } else {
+                        $siguiente = 0
+                        foreach ($k in @($sc.Keys)) { $n = 0; if ([int]::TryParse($k, [ref]$n) -and $n -ge $siguiente) { $siguiente = $n + 1 } }
+                        $sc["$siguiente"] = $entrada
+                        $r.Clave = "$siguiente"
+                    }
+                    $r.Ok = $true
+                    $hechas += [pscustomobject]@{ Indice = $r.Clave; Nombre = $a.Nombre; Exe = $a.Exe; LaunchOptions = $opciones }
+                }
+            }
+        } catch { $r.Motivo = $_.Exception.Message }
+        $resultados.Add($r)
+    }
+    return $resultados.ToArray()
+}
+
+# Lee shortcuts.vdf o, si todavia no existe (nunca se ha anadido nada), uno vacio
+function Read-ShortcutsOVacio {
+    param([Parameter(Mandatory)][string]$Ruta)
+    if (Test-Path -LiteralPath $Ruta) { $root = Read-BinaryVdf -Path $Ruta }
+    else { $root = [ordered]@{} }
+    if (-not $root['shortcuts']) { $root['shortcuts'] = [ordered]@{} }
+    return $root
+}
+
 # Borra de config\grid\ las imagenes de un appid que ya no usa ninguna entrada de
 # shortcuts.vdf: las de un juego quitado, las del appid viejo al reemplazar o las copiadas
 # para un acceso directo que al final no se escribio.

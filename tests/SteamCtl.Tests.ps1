@@ -147,6 +147,99 @@ Describe 'Remove-SteamShortcut' {
     }
 }
 
+Describe 'Invoke-CambiosShortcuts' {
+    # Varios juegos con un solo reinicio de Steam: todo en memoria sobre lo leido del VDF
+    BeforeAll {
+        function New-Juego([string]$nombre, [string]$exe, [string]$opciones = '') {
+            [pscustomobject]@{ Nombre = $nombre; Exe = $exe; StartDir = 'C:\Juegos\'; Icono = ''; LaunchOptions = $opciones }
+        }
+        $raymanDeLista = New-Juego 'Rayman Origins' $script:Ubi 'uplay://launch/80/0'
+    }
+    BeforeEach {
+        $vdf = Join-Path $TestDrive 'shortcuts.vdf'
+        New-VdfConDos $vdf
+        $root = Read-BinaryVdf -Path $vdf
+    }
+
+    It 'quita varios de una vez, con sus appid, y renumera como Steam' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Bajas @((New-Juego 'Mi Juego' 'C:\Juegos\Juego.exe'), $raymanDeLista))
+        $r.Ok | Should -Be @($true, $true)
+        $r[0].Quitados | Should -Be @($script:IdMiJuego)
+        $r[1].Quitados | Should -Be @($script:IdRayman)
+        $root['shortcuts'].Count | Should -Be 0
+    }
+    It 'una baja casa también por el exe, y dice el nombre que tenía en Steam' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Bajas @(New-Juego 'ACValhalla' $script:Ubi 'uplay://launch/80/0'))
+        $r[0].Ok | Should -BeTrue
+        $r[0].NombreEnSteam | Should -BeExactly 'Rayman Origins'
+        @($root['shortcuts'].Keys) | Should -Be @('0')
+        $root['shortcuts']['0']['AppName'] | Should -BeExactly 'Mi Juego'
+    }
+    It 'la que no está se anota y no para a las demás; dos que casan con la misma entrada no quitan otra' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Bajas @((New-Juego 'No existe' 'C:\x.exe'), $raymanDeLista, $raymanDeLista))
+        $r.Motivo | Should -Be @('no-esta', '', 'no-esta')
+        $root['shortcuts'].Count | Should -Be 1
+    }
+    It 'añade varios detrás de los que hay, cada uno con su appid y su clave' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Altas @((New-Juego 'Uno' 'C:\uno.exe'), (New-Juego 'Dos' 'C:\dos.exe')))
+        $r.Ok | Should -Be @($true, $true)
+        $r.Clave | Should -Be @('2', '3')
+        $r[0].AppId | Should -Be (Get-SteamShortcutAppId -ExeQuoted '"C:\uno.exe"' -AppName 'Uno')
+        $root['shortcuts']['3']['AppName'] | Should -BeExactly 'Dos'
+    }
+    It 'sin reemplazar, el que ya está se salta y no cambia nada' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Altas @($raymanDeLista))
+        $r[0].Ok | Should -BeFalse
+        $r[0].Motivo | Should -Be 'duplicado'
+        $salida = Join-Path $TestDrive 'salida.vdf'
+        Write-BinaryVdf -Root $root -Path $salida
+        Get-Hash $salida | Should -Be (Get-Hash $vdf)
+    }
+    It 'dos elegidos iguales: el segundo es un repetido (por nombre o por exe)' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Altas @((New-Juego 'Uno' 'C:\uno.exe'), (New-Juego 'Uno' 'C:\otro.exe'), (New-Juego 'Otro' 'C:\uno.exe')))
+        $r.Motivo | Should -Be @('', 'repetido', 'repetido')
+        $root['shortcuts'].Count | Should -Be 3
+    }
+    It 'al reemplazar con otro exe da el appid anterior, en la misma clave' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Reemplazar -Altas @(New-Juego 'Mi Juego' 'C:\Juegos\Nuevo.exe'))
+        $r[0].Ok | Should -BeTrue
+        $r[0].Clave | Should -Be '0'
+        $r[0].AppIdAnterior | Should -Be $script:IdMiJuego
+        $root['shortcuts']['0']['Exe'] | Should -BeExactly '"C:\Juegos\Nuevo.exe"'
+    }
+    It 'un alta que falla no para a las demás' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Altas @((New-Juego '' 'C:\sin-nombre.exe'), (New-Juego 'Bueno' 'C:\bueno.exe')))
+        $r[0].Ok | Should -BeFalse
+        $r[0].Motivo | Should -Not -BeNullOrEmpty
+        $r[1].Ok | Should -BeTrue
+        $root['shortcuts']['2']['AppName'] | Should -BeExactly 'Bueno'
+    }
+    It 'bajas y altas en el mismo lote: primero las bajas' {
+        $r = @(Invoke-CambiosShortcuts -Root $root -Bajas @(New-Juego 'Mi Juego' 'C:\Juegos\Juego.exe') -Altas @(New-Juego 'Nuevo' 'C:\nuevo.exe'))
+        $r.Tipo | Should -Be @('Baja', 'Alta')
+        @($root['shortcuts'].Keys) | Should -Be @('0', '1')
+        $root['shortcuts']['1']['AppName'] | Should -BeExactly 'Nuevo'
+    }
+    It 'añadir dos y quitarlos después deja el fichero idéntico byte a byte' {
+        $antes = Get-Hash $vdf
+        $nuevos = @((New-Juego 'Uno' 'C:\uno.exe'), (New-Juego 'Dos' 'C:\dos.exe' '-x'))
+        [void](Invoke-CambiosShortcuts -Root $root -Altas $nuevos)
+        Write-BinaryVdf -Root $root -Path $vdf
+        $root = Read-BinaryVdf -Path $vdf
+        [void](Invoke-CambiosShortcuts -Root $root -Bajas $nuevos)
+        Write-BinaryVdf -Root $root -Path $vdf
+        Get-Hash $vdf | Should -Be $antes
+    }
+    It 'sin entradas (VDF nuevo) añade desde la 0' {
+        $vacio = Read-ShortcutsOVacio -Ruta (Join-Path $TestDrive 'no-existe.vdf')
+        $r = @(Invoke-CambiosShortcuts -Root $vacio -Altas @(New-Juego 'Uno' 'C:\uno.exe'))
+        $r[0].Clave | Should -Be '0'
+    }
+    It 'sin nada que hacer no devuelve nada' {
+        @(Invoke-CambiosShortcuts -Root $root).Count | Should -Be 0
+    }
+}
+
 Describe 'Remove-CaratulasHuerfanas' {
     BeforeEach {
         $vdf = Join-Path $TestDrive 'shortcuts.vdf'

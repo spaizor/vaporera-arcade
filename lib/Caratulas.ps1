@@ -59,14 +59,21 @@ function Get-TituloNormalizado {
     $t = $t -replace '[^a-z0-9]+', ' '   # puntuacion, (tm), (r), dos puntos...
     $t = $t.Trim()
     # 'Forza Horizon 5' y 'Forza Horizon 5 Deluxe Edition' son el mismo juego.
-    # El catalogo responde en el idioma del mercado, asi que hay que quitar tambien la
-    # coletilla en espanol, que ademas va al reves: 'Forza Horizon 5 Edición Premium'.
-    $ed   = 'standard|deluxe|ultimate|complete|definitive|premium|gold|goty|game of the year|anniversary|remastered|enhanced|legendary|collectors|collector|digital'
-    $edEs = 'estandar|deluxe|premium|definitiva|completa|especial|oro|coleccionista|aniversario|legendaria|digital|ultimate|de lujo|anticipada|juego del ano|del ano'
+    # El catalogo responde en el idioma del mercado (el de Windows, Get-MercadoStore), asi que
+    # hay que quitar tambien la coletilla en ese idioma, que en los latinos va al reves:
+    # 'Edición Premium', 'Édition standard', 'Edizione Deluxe', 'Edição Definitiva'. El aleman
+    # la pone como el ingles ('Standard Edition', 'Spiel des Jahres Edition').
+    $ed   = 'standard|deluxe|ultimate|complete|definitive|premium|gold|goty|game of the year|anniversary|remastered|enhanced|legendary|collectors|collector|digital|spiel des jahres'
+    $edTras = 'estandar|standard|padrao|deluxe|de lujo|premium|definitiva|definitive|completa|complete|especial|speciale|' +
+              'oro|or|ouro|coleccionista|collector|de colecionador|aniversario|anniversaire|anniversario|' +
+              'legendaria|legendaire|leggendaria|lendaria|ultimate|ultime|digital|anticipada|' +
+              'juego del ano|del ano|jeu de l annee|gioco dell anno|jogo do ano'
     for ($i = 0; $i -lt 3; $i++) {
         $t = $t -replace "\s+($ed)(\s+(edition|bundle|pack))?$", ''
-        $t = $t -replace "\s+edicion(\s+($edEs))?$", ''
-        $t = $t -replace '\s+(edition|bundle|for windows|windows edition|pc|hd)$', ''
+        # antes que la de abajo, que de 'windows edition' se llevaria solo 'edition'
+        $t = $t -replace '\s+(bundle|for windows|windows edition|pc|hd)$', ''
+        # 'edicion' (es), 'edition' (fr), 'edizione' (it), 'edicao' (pt) y detras el tipo
+        $t = $t -replace "\s+(edicion|edition|edizione|edicao)(\s+($edTras))?$", ''
     }
     $t = ($t -replace '\s+', ' ').Trim()
     # si al normalizar no queda nada (un titulo en japones, por ejemplo) mejor el original:
@@ -119,14 +126,65 @@ function Get-ParecidoTitulo {
 # ---------------------------------------------------------------------
 #  Microsoft Store
 # ---------------------------------------------------------------------
+# Mercado e idiomas del catalogo, de la configuracion regional de Windows (la de formatos).
+# Hasta la 0.9 iban fijos a Espana. Con una cultura sin pais (neutra, invariante o 'es-419')
+# se queda en Espana. El ingles va siempre detras: hay fichas sin el idioma local.
+function Get-MercadoStore {
+    param([string]$Cultura = '')
+    if (-not $Cultura) { $Cultura = [string](Get-Culture).Name }
+    $mercado = 'ES'; $idioma = 'es-ES'
+    # 'fr-FR', 'zh-Hans-CN'...: el pais es lo ultimo
+    if ($Cultura -match '^[a-zA-Z]{2,3}(-[a-zA-Z]{4})?-([a-zA-Z]{2})$') {
+        $mercado = $Matches[2].ToUpperInvariant(); $idioma = $Cultura
+    }
+    $idiomas = @($idioma)
+    if ($idioma -ne 'en-US') { $idiomas += 'en-US' }
+    return [pscustomobject]@{ Mercado = $mercado; Idioma = $idioma; Idiomas = ($idiomas -join ',') }
+}
+
+# El codigo HTTP de un fallo de Invoke-RestMethod (0 si no llego a contestar). Aparte para
+# poder simularlo en los tests: una WebException con respuesta no se puede fabricar.
+function Get-CodigoHttp {
+    param($Fallo)
+    try {
+        $resp = $Fallo.Exception.Response
+        if ($resp) { return [int]$resp.StatusCode }
+    } catch { }
+    return 0
+}
+
+# Pide a la Store la URL de $Plantilla ({0} mercado, {1} idioma, {2} idiomas) con el mercado de
+# Windows y, si no lo conoce (un pais que no es Espana y contesta 400 o 404), con Espana. Lo
+# demas (sin red, tiempo agotado) lanza, igual que Invoke-RestMethod.
+function Invoke-StoreConMercado {
+    param(
+        [Parameter(Mandatory)][string]$Plantilla,
+        [hashtable]$Cabeceras = @{},
+        [int]$Segundos = 20
+    )
+    $mercados = @(Get-MercadoStore)
+    if ($mercados[0].Mercado -ne 'ES') { $mercados += Get-MercadoStore -Cultura 'es-ES' }
+    for ($i = 0; $i -lt $mercados.Count; $i++) {
+        $m = $mercados[$i]
+        $url = $Plantilla -f [uri]::EscapeDataString($m.Mercado), [uri]::EscapeDataString($m.Idioma), $m.Idiomas
+        try {
+            return (Invoke-RestMethod -Uri $url -Headers $Cabeceras -TimeoutSec $Segundos)
+        } catch {
+            $codigo = Get-CodigoHttp $_
+            if ($i -lt $mercados.Count - 1 -and ($codigo -eq 400 -or $codigo -eq 404)) { continue }
+            throw
+        }
+    }
+}
+
 # La ficha del producto en el catalogo, o $null si no responde
 function Get-StoreProducto {
     param([Parameter(Mandatory)][string]$StoreId)
     Initialize-Tls
-    $url = "https://displaycatalog.mp.microsoft.com/v7.0/products/$StoreId" +
-           "?market=ES&languages=es-ES,en-US&fieldsTemplate=Details"
+    $plantilla = "https://displaycatalog.mp.microsoft.com/v7.0/products/$([uri]::EscapeDataString($StoreId))" +
+                 '?market={0}&languages={2}&fieldsTemplate=Details'
     try {
-        $r = Invoke-RestMethod -Uri $url -Headers @{ 'MS-CV' = 'VaporeraArcade.1' } -TimeoutSec 25
+        $r = Invoke-StoreConMercado -Plantilla $plantilla -Cabeceras @{ 'MS-CV' = 'VaporeraArcade.1' } -Segundos 25
     } catch { return $null }
     return $r.Product
 }
@@ -175,17 +233,21 @@ function Get-StoreImagenes {
 function Get-StoreCandidatos {
     param([Parameter(Mandatory)][string]$Nombre)
     Initialize-Tls
+    # escapado no lleva llaves (quedan como %7B), que romperian el -f de la plantilla
     $q = [uri]::EscapeDataString($Nombre)
-    $url = "https://storeedgefd.dsx.mp.microsoft.com/v9.0/search?query=$q&market=ES&locale=es-ES&deviceFamily=Windows.Desktop"
+    $plantilla = "https://storeedgefd.dsx.mp.microsoft.com/v9.0/search?query=$q" + '&market={0}&locale={1}&deviceFamily=Windows.Desktop'
     $lista = @()
     try {
-        $r = Invoke-RestMethod -Uri $url -TimeoutSec 20
+        $r = Invoke-StoreConMercado -Plantilla $plantilla
         foreach ($res in $r.Payload.SearchResults) {
             if (-not $res.ProductId) { continue }
+            # el editor es para elegir a mano entre juegos de nombre parecido. El anio no: su
+            # ReleaseDate es la de la ficha (Assassin's Creed Origins sale como de 2026)
             $lista += [pscustomobject]@{
                 Id       = $res.ProductId
                 Titulo   = [string]$res.Title
                 EsJuego  = ($res.ProductFamilyName -eq 'Games')
+                Editor   = [string]$res.PublisherName
                 Parecido = (Get-ParecidoTitulo -Buscado $Nombre -Candidato ([string]$res.Title))
             }
         }
@@ -258,13 +320,58 @@ function Get-SgdbCandidatos {
     $b = Invoke-RestMethod -Uri "https://www.steamgriddb.com/api/v2/search/autocomplete/$([uri]::EscapeDataString($Nombre))" -Headers $Cabeceras -TimeoutSec 20
     foreach ($res in $b.data) {
         if (-not $res.id) { continue }
+        # release_date llega en segundos desde 1970 (o no llega)
+        $anio = ''
+        $seg = 0L
+        if ($res.release_date -and [long]::TryParse([string]$res.release_date, [ref]$seg) -and $seg -gt 0) {
+            $anio = [string][DateTimeOffset]::FromUnixTimeSeconds($seg).UtcDateTime.Year
+        }
         $lista += [pscustomobject]@{
             Id       = $res.id
             Titulo   = [string]$res.name
+            Anio     = $anio
             Parecido = (Get-ParecidoTitulo -Buscado $Nombre -Candidato ([string]$res.name))
         }
     }
     return @($lista | Sort-Object Parecido -Descending)
+}
+
+# Para elegir el juego a mano cuando la busqueda automatica acierta con otro (o con ninguno):
+# lo que encuentran la Store y SteamGridDB (con clave), todo junto por parecido. Mezclados
+# porque la Store devuelve mucho relleno (buscando 'Rayman Origins' salian 22 juegos sin nada
+# que ver antes del bueno, que estaba en SteamGridDB). A igual parecido, antes la Store. No lanza.
+function Get-CandidatosJuego {
+    param(
+        [Parameter(Mandatory)][string]$Nombre,
+        [scriptblock]$Log = $null
+    )
+    function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
+    $lista = @()
+    foreach ($c in @(Get-StoreCandidatos -Nombre $Nombre)) {
+        $det = @()
+        if ($c.Editor) { $det += $c.Editor }
+        if (-not $c.EsJuego) { $det += 'no es un juego' }
+        $lista += [pscustomobject]@{ Fuente = 'Microsoft Store'; Id = [string]$c.Id; Titulo = $c.Titulo
+                                     Parecido = $c.Parecido; Detalle = ($det -join ' · ') }
+    }
+    $clave = Get-SgdbClave
+    if (-not $clave) {
+        Registrar '  sin clave de SteamGridDB (se pone en Ajustes): solo busco en la Store'
+    } else {
+        Initialize-Tls
+        try {
+            foreach ($c in @(Get-SgdbCandidatos -Nombre $Nombre -Cabeceras @{ Authorization = "Bearer $clave" })) {
+                $lista += [pscustomobject]@{ Fuente = 'SteamGridDB'; Id = [string]$c.Id; Titulo = $c.Titulo
+                                             Parecido = $c.Parecido; Detalle = [string]$c.Anio }
+            }
+        } catch {
+            Registrar "  SteamGridDB ha fallado: $($_.Exception.Message)"
+        }
+    }
+    # Sort-Object no garantiza el orden de los empates: se desempata por la posicion
+    $i = 0
+    $numerados = foreach ($c in $lista) { [pscustomobject]@{ C = $c; Pos = $i }; $i++ }
+    return @($numerados | Sort-Object @{ Expression = { $_.C.Parecido }; Descending = $true }, Pos | ForEach-Object { $_.C })
 }
 
 # El id del juego que mas se parece al nombre, o $null si ninguno se parece bastante
@@ -329,9 +436,11 @@ function Get-SgdbAlternativas {
     return $lista
 }
 
+# Con $SgdbId (el juego elegido a mano) no se busca por el nombre
 function Get-SgdbImagenes {
     param(
         [Parameter(Mandatory)][string]$Nombre,
+        [string]$SgdbId = '',
         [double]$MinParecido = $MinParecidoTitulo,
         [scriptblock]$Log = $null
     )
@@ -341,7 +450,8 @@ function Get-SgdbImagenes {
     Initialize-Tls
     $h = @{ Authorization = "Bearer $clave" }
     try {
-        $id = Find-SgdbId -Nombre $Nombre -Cabeceras $h -MinParecido $MinParecido -Log $Log
+        $id = $SgdbId
+        if (-not $id) { $id = Find-SgdbId -Nombre $Nombre -Cabeceras $h -MinParecido $MinParecido -Log $Log }
         if (-not $id) { return $null }
         # el id va tambien: la galeria de la vista previa lo reutiliza para no buscar otra vez
         $res = @{ Id = $id }
@@ -629,6 +739,10 @@ function New-CaratulasSteam {
         [Parameter(Mandatory)][string]$GridDir,
         [string]$NombreFinal = '',
         [ValidateSet('Automatico','Store','SteamGridDB','Local')][string]$OrigenArte = 'Automatico',
+        # El juego elegido a mano en la galeria (uno u otro), cuando la busqueda por el nombre
+        # acierta con otro. No se llaman StoreId/SgdbId: chocarian con $storeId y $sgdbId.
+        [string]$StoreIdElegido = '',
+        [string]$SgdbIdElegido = '',
         [scriptblock]$Log = $null
     )
     function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
@@ -640,10 +754,19 @@ function New-CaratulasSteam {
 
     $origen = 'assets locales'
     $poster = $null; $hero = $null; $capsule = $null; $logo = $null; $logoDeSgdb = $false
+    # Con lo que se busca en SteamGridDB (y luego en la galeria). Con el juego de la Store
+    # elegido a mano, su titulo: el nombre es justo lo que no encontraba nada.
+    $busqueda = $NombreFinal
 
     # 1) Microsoft Store
     $storeId = $null
-    if ($OrigenArte -eq 'Automatico' -or $OrigenArte -eq 'Store') {
+    if ($StoreIdElegido) {
+        $storeId = $StoreIdElegido
+        Registrar "Juego elegido a mano en la Store ($storeId)."
+    } elseif ($SgdbIdElegido) {
+        # el de la Store (si lo habia) era el equivocado
+        Registrar "Juego elegido a mano en SteamGridDB ($SgdbIdElegido): me salto la Store."
+    } elseif ($OrigenArte -eq 'Automatico' -or $OrigenArte -eq 'Store') {
         $storeId = $Juego.StoreId
         if (-not $storeId) {
             Registrar "Buscando '$NombreFinal' en el catálogo de la Store..."
@@ -654,6 +777,7 @@ function New-CaratulasSteam {
     if ($storeId) {
         Registrar "Descargando carátulas oficiales de la Store ($storeId)..."
         $cat = Get-StoreImagenes -StoreId $storeId
+        if ($cat -and $StoreIdElegido -and $cat.Titulo) { $busqueda = [string]$cat.Titulo }
         if ($cat) {
             $im = $cat.Imagenes
             if ($im['Poster'])        { $poster  = Get-BitmapDesdeUrl $im['Poster'].Uri }
@@ -671,9 +795,10 @@ function New-CaratulasSteam {
 
     # 2) SteamGridDB
     $sgdbId = $null
-    if (-not $poster -and ($OrigenArte -eq 'Automatico' -or $OrigenArte -eq 'SteamGridDB')) {
-        Registrar "Buscando '$NombreFinal' en SteamGridDB..."
-        $sg = Get-SgdbImagenes -Nombre $NombreFinal -Log $Log
+    if (-not $poster -and ($SgdbIdElegido -or $OrigenArte -eq 'Automatico' -or $OrigenArte -eq 'SteamGridDB')) {
+        if ($SgdbIdElegido) { Registrar "Descargando de SteamGridDB ($SgdbIdElegido)..." }
+        else { Registrar "Buscando '$busqueda' en SteamGridDB..." }
+        $sg = Get-SgdbImagenes -Nombre $busqueda -SgdbId $SgdbIdElegido -Log $Log
         if ($sg) {
             $sgdbId = $sg['Id']
             if ($sg['Poster'])  { $poster  = Get-BitmapDesdeUrl $sg['Poster'] }
@@ -754,7 +879,8 @@ function New-CaratulasSteam {
         if ($bm -and -not $sueltos.Contains($bm)) { [void]$sueltos.Add($bm); $bm.Dispose() }
     }
     Registrar "Carátulas generadas desde: $origen"
-    return [pscustomobject]@{ Origen = $origen; Rutas = $rutas; StoreId = $storeId; SgdbId = $sgdbId; IconoDe = $iconoDe }
+    return [pscustomobject]@{ Origen = $origen; Rutas = $rutas; StoreId = $storeId; SgdbId = $sgdbId; IconoDe = $iconoDe
+                              Busqueda = $busqueda }
 }
 
 # ---------------------------------------------------------------------
@@ -879,10 +1005,15 @@ function Set-CaratulaRanura {
         [scriptblock]$Log = $null
     )
     function Registrar($m) { if ($Log) { & $Log $m | Out-Null } }
-    if ($Origen -match '^https?://') { $bytes = Get-BytesDesdeUrl $Origen }
+    $deLaRed = ($Origen -match '^https?://')
+    if ($deLaRed) { $bytes = Get-BytesDesdeUrl $Origen }
     else { $bytes = [System.IO.File]::ReadAllBytes($Origen) }
     try { $bm = Get-BitmapDesdeBytes $bytes } catch { $bm = $null }
-    if (-not $bm) { throw 'Lo descargado no es una imagen que se pueda leer.' }
+    if (-not $bm) {
+        if ($deLaRed) { throw 'Lo descargado no es una imagen que se pueda leer.' }
+        # un WebP o un AVIF, por ejemplo: GDI+ no los lee
+        throw 'El fichero no es una imagen que se pueda leer (valen PNG, JPG, BMP y GIF).'
+    }
     $final = $null; $ic = $null
     try {
         $nombres = @{ p = "${AppId}p.png"; cap = "${AppId}.png"; hero = "${AppId}_hero.png"; logo = "${AppId}_logo.png" }
@@ -907,6 +1038,10 @@ function Set-CaratulaRanura {
         if ($ic) { $ic.Save($icono, [System.Drawing.Imaging.ImageFormat]::Png) }
 
         Registrar "  $($nombres[$Ranura]): $($bm.Width)x$($bm.Height)"
+        # Se usa igual (la ha elegido el usuario), pero el logo va suelto encima del hero
+        if ($Ranura -eq 'logo' -and -not (Test-EsLogo -Bitmap $bm)) {
+            Registrar '  ojo: esa imagen no tiene el fondo transparente y en Steam se verá con su fondo encima del hero'
+        }
         if ($ic) { $IconoDe = $Ranura; Registrar '  icono rehecho con la nueva imagen' }
         return [pscustomobject]@{ Ranura = $Ranura; Ruta = $ruta; Icono = $icono; IconoDe = $IconoDe }
     } finally {

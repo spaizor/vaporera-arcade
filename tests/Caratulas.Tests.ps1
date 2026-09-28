@@ -80,8 +80,68 @@ Describe 'Get-TituloNormalizado' {
         @{ Texto = 'Wolfenstein II: The New Colossus'; Esperado = 'wolfenstein ii the new colossus' }
         @{ Texto = '  Pokémon™  '; Esperado = 'pokemon' }
         @{ Texto = ''; Esperado = '' }
+        # como los devuelve la Store en otros mercados (Forza Horizon 5, visto en FR y MX)
+        @{ Texto = 'Forza Horizon 5 Édition standard'; Esperado = 'forza horizon 5' }
+        @{ Texto = 'Forza Horizon 5: Edición Estándar'; Esperado = 'forza horizon 5' }
+        @{ Texto = 'Forza Horizon 5 Standard Edition'; Esperado = 'forza horizon 5' }
+        @{ Texto = "Assassin's Creed Valhalla Edizione Deluxe"; Esperado = 'assassin s creed valhalla' }
+        @{ Texto = 'Red Dead Redemption 2: Edição Definitiva'; Esperado = 'red dead redemption 2' }
+        @{ Texto = "Fallout 4 Édition Jeu de l'année"; Esperado = 'fallout 4' }
+        @{ Texto = 'The Witcher 3: Wild Hunt – Spiel des Jahres Edition'; Esperado = 'the witcher 3 wild hunt' }
+        @{ Texto = 'Age of Empires Windows Edition'; Esperado = 'age of empires' }
     ) {
         Get-TituloNormalizado $Texto | Should -BeExactly $Esperado
+    }
+}
+
+Describe 'Get-MercadoStore' {
+    It '<Cultura> da el mercado <Mercado> y los idiomas <Idiomas>' -ForEach @(
+        @{ Cultura = 'es-ES';      Mercado = 'ES'; Idioma = 'es-ES';      Idiomas = 'es-ES,en-US' }
+        @{ Cultura = 'fr-FR';      Mercado = 'FR'; Idioma = 'fr-FR';      Idiomas = 'fr-FR,en-US' }
+        @{ Cultura = 'en-US';      Mercado = 'US'; Idioma = 'en-US';      Idiomas = 'en-US' }
+        @{ Cultura = 'zh-Hans-CN'; Mercado = 'CN'; Idioma = 'zh-Hans-CN'; Idiomas = 'zh-Hans-CN,en-US' }
+        # sin pais: Espana, como hasta la 0.9
+        @{ Cultura = 'es';         Mercado = 'ES'; Idioma = 'es-ES';      Idiomas = 'es-ES,en-US' }
+        @{ Cultura = 'es-419';     Mercado = 'ES'; Idioma = 'es-ES';      Idiomas = 'es-ES,en-US' }
+    ) {
+        $m = Get-MercadoStore -Cultura $Cultura
+        $m.Mercado | Should -BeExactly $Mercado
+        $m.Idioma | Should -BeExactly $Idioma
+        $m.Idiomas | Should -BeExactly $Idiomas
+    }
+    It 'sin cultura, la de Windows' {
+        Mock Get-Culture { [pscustomobject]@{ Name = 'it-IT' } }
+        (Get-MercadoStore).Mercado | Should -Be 'IT'
+    }
+}
+
+Describe 'Invoke-StoreConMercado' {
+    BeforeAll {
+        Mock Get-Culture { [pscustomobject]@{ Name = 'fr-FR' } }
+        $plantilla = 'https://store/x?market={0}&locale={1}&languages={2}'
+    }
+    It 'pide con el mercado de Windows' {
+        Mock Invoke-RestMethod { 'ok' }
+        Invoke-StoreConMercado -Plantilla $plantilla | Should -Be 'ok'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://store/x?market=FR&locale=fr-FR&languages=fr-FR,en-US' }
+    }
+    It 'si la Store no conoce el mercado (400), vuelve a probar con España' {
+        Mock Invoke-RestMethod { if ($Uri -match 'market=FR') { throw 'mercado desconocido' } else { 'es' } }
+        Mock Get-CodigoHttp { 400 }
+        Invoke-StoreConMercado -Plantilla $plantilla | Should -Be 'es'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://store/x?market=ES&locale=es-ES&languages=es-ES,en-US' }
+    }
+    It 'sin red (sin código HTTP) no reintenta: lanza' {
+        Mock Invoke-RestMethod { throw 'sin red' }
+        Mock Get-CodigoHttp { 0 }
+        { Invoke-StoreConMercado -Plantilla $plantilla } | Should -Throw '*sin red*'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+    }
+    It 'si falla también con España, lanza' {
+        Mock Invoke-RestMethod { throw 'no esta' }
+        Mock Get-CodigoHttp { 404 }
+        { Invoke-StoreConMercado -Plantilla $plantilla } | Should -Throw '*no esta*'
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
     }
 }
 
@@ -441,7 +501,135 @@ Describe 'Set-CaratulaRanura' {
     It 'lanza si la imagen no se puede leer, sin dejar nada a medias' {
         $malo = Join-Path $TestDrive 'malo.png'
         [IO.File]::WriteAllBytes($malo, [byte[]](1, 2, 3))
-        { Set-CaratulaRanura -Ranura 'p' -Origen $malo -GridDir $grid -AppId 42 } | Should -Throw
+        { Set-CaratulaRanura -Ranura 'p' -Origen $malo -GridDir $grid -AppId 42 } | Should -Throw '*El fichero no es una imagen*'
         @(Get-ChildItem -LiteralPath $grid).Count | Should -Be 0
+    }
+
+    It 'un logo propio con fondo se usa igual, pero avisa' {
+        $cuadrada = Join-Path $TestDrive 'cuadrada.png'
+        $bm = New-BitmapPrueba 300 300
+        $bm.Save($cuadrada, [System.Drawing.Imaging.ImageFormat]::Png); $bm.Dispose()
+        $lineas = New-Object System.Collections.ArrayList
+        $r = Set-CaratulaRanura -Ranura 'logo' -Origen $cuadrada -GridDir $grid -AppId 42 -Log { param($m) [void]$lineas.Add($m) }
+        Test-Path -LiteralPath $r.Ruta | Should -BeTrue
+        ($lineas -join ' ') | Should -Match 'transparente'
+    }
+    It 'un logo apaisado no avisa' {
+        $lineas = New-Object System.Collections.ArrayList
+        [void](Set-CaratulaRanura -Ranura 'logo' -Origen $origen -GridDir $grid -AppId 42 -Log { param($m) [void]$lineas.Add($m) })
+        ($lineas -join ' ') | Should -Not -Match 'transparente'
+    }
+}
+
+Describe 'Get-StoreCandidatos' {
+    BeforeAll {
+        Mock Invoke-RestMethod {
+            [pscustomobject]@{ Payload = [pscustomobject]@{ SearchResults = @(
+                [pscustomobject]@{ ProductId = '9APP'; Title = 'Rayman Origins'; ProductFamilyName = 'Apps'; ReleaseDate = '2012-03-29T00:00:00Z'; PublisherName = 'Otro' }
+                [pscustomobject]@{ ProductId = '9LEG'; Title = 'Rayman Legends'; ProductFamilyName = 'Games'; ReleaseDate = $null; PublisherName = $null }
+                [pscustomobject]@{ ProductId = '9ORI'; Title = 'Rayman Origins'; ProductFamilyName = 'Games'; ReleaseDate = '2012-03-29T18:00:00Z'; PublisherName = 'Ubisoft' }
+                [pscustomobject]@{ ProductId = $null; Title = 'Sin id' }
+            ) } }
+        }
+    }
+    It 'de más a menos parecido y, a igual parecido, antes el juego; con el editor' {
+        $r = @(Get-StoreCandidatos -Nombre 'Rayman Origins')
+        $r.Id | Should -Be @('9ORI', '9APP', '9LEG')
+        $r[0].Editor | Should -Be 'Ubisoft'
+        $r[0].EsJuego | Should -BeTrue
+        $r[1].EsJuego | Should -BeFalse
+        $r[2].Editor | Should -Be ''
+    }
+}
+
+Describe 'Get-SgdbCandidatos' {
+    It 'saca el año de release_date (segundos desde 1970) y lo deja vacío si no viene' {
+        Mock Invoke-RestMethod {
+            [pscustomobject]@{ data = @(
+                [pscustomobject]@{ id = 1; name = 'Rayman'; release_date = 809913600 }
+                [pscustomobject]@{ id = 2; name = 'Rayman 2: The Great Escape'; release_date = $null }
+            ) }
+        }
+        $r = @(Get-SgdbCandidatos -Nombre 'Rayman' -Cabeceras @{})
+        $r[0].Id | Should -Be 1
+        $r[0].Anio | Should -Be '1995'
+        $r[1].Anio | Should -Be ''
+    }
+}
+
+Describe 'Get-CandidatosJuego' {
+    BeforeAll {
+        Mock Get-StoreCandidatos {
+            @([pscustomobject]@{ Id = '9ABC'; Titulo = 'Juego'; EsJuego = $true; Editor = 'Estudio'; Parecido = 1 }
+              [pscustomobject]@{ Id = '9APP'; Titulo = 'Juego Companion'; EsJuego = $false; Editor = ''; Parecido = 0.5 })
+        }
+        Mock Get-SgdbCandidatos {
+            @([pscustomobject]@{ Id = 77; Titulo = 'Juego'; Anio = '2019'; Parecido = 1 }
+              [pscustomobject]@{ Id = 78; Titulo = 'Juego 2'; Anio = ''; Parecido = 0.8 })
+        }
+    }
+    It 'las dos fuentes mezcladas por parecido (a igual, antes la Store), con el detalle para distinguirlos' {
+        Mock Get-SgdbClave { 'clave' }
+        $r = @(Get-CandidatosJuego -Nombre 'Juego')
+        $r.Id | Should -Be @('9ABC', '77', '78', '9APP')
+        $r.Fuente | Should -Be @('Microsoft Store', 'SteamGridDB', 'SteamGridDB', 'Microsoft Store')
+        $r[0].Detalle | Should -Be 'Estudio'
+        $r[1].Detalle | Should -Be '2019'
+        $r[2].Detalle | Should -Be ''
+        $r[3].Detalle | Should -Be 'no es un juego'
+    }
+    It 'sin clave de SteamGridDB, solo la Store, y lo dice' {
+        Mock Get-SgdbClave { $null }
+        $lineas = New-Object System.Collections.ArrayList
+        $r = @(Get-CandidatosJuego -Nombre 'Juego' -Log { param($m) [void]$lineas.Add($m) })
+        $r.Count | Should -Be 2
+        Should -Invoke Get-SgdbCandidatos -Times 0 -Exactly
+        ($lineas -join ' ') | Should -Match 'sin clave'
+    }
+    It 'si SteamGridDB falla, se queda con lo de la Store y no lanza' {
+        Mock Get-SgdbClave { 'clave' }
+        Mock Get-SgdbCandidatos { throw 'sin red' }
+        @(Get-CandidatosJuego -Nombre 'Juego').Count | Should -Be 2
+    }
+}
+
+Describe 'New-CaratulasSteam con el juego elegido a mano' {
+    # Sin red: la Store y SteamGridDB no devuelven imagenes y todo se compone con lo local.
+    # Lo que se mira es a quien se pregunta y con que.
+    BeforeAll {
+        $grid = Join-Path $TestDrive 'grid-elegido'
+        Mock Find-StoreId { $null }
+        Mock Get-StoreImagenes { [pscustomobject]@{ Titulo = "Assassin's Creed Valhalla"; Imagenes = @{} } }
+        Mock Get-SgdbImagenes { if ($SgdbId) { @{ Id = $SgdbId } } else { $null } }
+        function New-JuegoPrueba([string]$storeId = '') {
+            [pscustomobject]@{ Nombre = 'ACValhalla'; Carpeta = (Join-Path $TestDrive 'no-existe'); Icono = ''
+                               LaunchOptions = ''; StoreId = $storeId }
+        }
+    }
+    It 'sin elegir nada busca por el nombre, como siempre' {
+        $r = New-CaratulasSteam -Juego (New-JuegoPrueba) -AppId 42 -GridDir $grid
+        Should -Invoke Find-StoreId -Times 1 -Exactly -ParameterFilter { $Nombre -eq 'ACValhalla' }
+        Should -Invoke Get-SgdbImagenes -Times 1 -Exactly -ParameterFilter { $Nombre -eq 'ACValhalla' -and -not $SgdbId }
+        $r.Busqueda | Should -Be 'ACValhalla'
+    }
+    It 'con el de la Store no lo busca, y en SteamGridDB busca por su título' {
+        $r = New-CaratulasSteam -Juego (New-JuegoPrueba) -AppId 42 -GridDir $grid -StoreIdElegido '9VAL'
+        Should -Invoke Find-StoreId -Times 0 -Exactly
+        Should -Invoke Get-StoreImagenes -Times 1 -Exactly -ParameterFilter { $StoreId -eq '9VAL' }
+        Should -Invoke Get-SgdbImagenes -Times 1 -Exactly -ParameterFilter { $Nombre -eq "Assassin's Creed Valhalla" -and -not $SgdbId }
+        $r.StoreId | Should -Be '9VAL'
+        $r.Busqueda | Should -Be "Assassin's Creed Valhalla"
+    }
+    It 'con el de SteamGridDB se salta la Store, aunque el juego traiga StoreId' {
+        $r = New-CaratulasSteam -Juego (New-JuegoPrueba '9MAL') -AppId 42 -GridDir $grid -SgdbIdElegido '77'
+        Should -Invoke Find-StoreId -Times 0 -Exactly
+        Should -Invoke Get-StoreImagenes -Times 0 -Exactly
+        Should -Invoke Get-SgdbImagenes -Times 1 -Exactly -ParameterFilter { $SgdbId -eq '77' }
+        $r.StoreId | Should -BeNullOrEmpty
+        $r.SgdbId | Should -Be '77'
+    }
+    It 'el elegido manda aunque el origen esté forzado a otro' {
+        [void](New-CaratulasSteam -Juego (New-JuegoPrueba) -AppId 42 -GridDir $grid -OrigenArte 'Local' -SgdbIdElegido '77')
+        Should -Invoke Get-SgdbImagenes -Times 1 -Exactly -ParameterFilter { $SgdbId -eq '77' }
     }
 }

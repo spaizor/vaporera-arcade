@@ -79,6 +79,18 @@ function Get-RaicesXbox {
     return $res
 }
 
+# Un DLC de Game Pass (los episodios de "Wolfenstein II: The Freedom Chronicles", por ejemplo)
+# se instala como un juego mas, en su carpeta y con su gamelaunchhelper.exe, pero no es un juego:
+# depende del principal. Su MicrosoftGame.config lo dice con DesktopRegistration >
+# MainPackageDependency, la marca oficial de los DLC. No se mira que falte ExecutableList (el
+# DLC tampoco lo trae): un juego con el config incompleto desapareceria de la lista.
+function Test-XboxEsDlc {
+    param($Config)
+    if (-not $Config -or -not $Config.Game) { return $false }
+    $dr = $Config.Game.DesktopRegistration
+    return [bool]($dr -and $dr.MainPackageDependency)
+}
+
 function Get-JuegosXbox {
     $res = @()
     foreach ($raiz in (Get-RaicesXbox)) {
@@ -93,6 +105,7 @@ function Get-JuegosXbox {
             if (Test-Path -LiteralPath $cfg) {
                 try {
                     [xml]$x = Get-Content -LiteralPath $cfg -Raw -Encoding UTF8
+                    if (Test-XboxEsDlc $x) { continue }
                     # DefaultDisplayName puede venir como "ms-resource:AppTitle": es una
                     # referencia al catalogo de recursos del paquete, no un nombre. Resolverlo
                     # de verdad hace falta el paquete instalado; el nombre de la carpeta, que

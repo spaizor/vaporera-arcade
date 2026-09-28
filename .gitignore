@@ -13,3 +13,4 @@ sgdb.key
 # Notas locales para Claude Code
 CLAUDE.md
 .claude/
+prompt.txt
