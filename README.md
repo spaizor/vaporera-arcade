@@ -113,6 +113,11 @@ powershell -ExecutionPolicy Bypass -STA -File .\VaporeraArcade.ps1
      encontrado ninguno porque el nombre detectado no se parece al real. Busca en la Store y en
      SteamGridDB con el nombre que escribas, y al elegir el bueno se preparan otra vez todas las
      carátulas con él. El nombre con el que aparece en Steam no cambia.
+
+   ![La galería de la portada de un juego: la actual y las demás de la Store y de SteamGridDB, con los botones «Elegir otro juego…» y «Cargar imagen…» debajo](docs/captura-galeria.png)
+
+   ![La ventana «Elegir el juego»: un cuadro de búsqueda y la lista de resultados de la Store y de SteamGridDB, con el parecido de cada uno y el juego de ahora marcado](docs/captura-elegir.png)
+
 5. Pulsa **2. Añadir a Steam**. La aplicación cierra Steam, añade el juego, copia las imágenes
    y vuelve a abrir Steam.
 
@@ -144,6 +149,9 @@ Por orden de preferencia:
    API, que es gratuita: consíguela en tu [perfil de SteamGridDB](https://www.steamgriddb.com/profile/preferences/api),
    pulsa **Ajustes…** en la aplicación, pégala y usa **Probar** para comprobar que funciona.
    Se guarda en `%LOCALAPPDATA%\VaporeraArcade\config.json`, fuera de la carpeta de la aplicación.
+
+   ![La ventana de Ajustes, con el cuadro para la clave de API de SteamGridDB y los botones Probar, Guardar y Cancelar](docs/captura-ajustes.png)
+
 3. **Imágenes del propio juego.** Si no hay nada más, compone las carátulas con el fondo y el
    logo que trae el juego instalado (en Ubisoft y GOG, su icono a 256×256; en los clásicos de
    GOG, el del juego y no el de DOSBox o ScummVM). En las apps de la Store usa el icono de la
@@ -286,7 +294,7 @@ Vaporera Arcade
 ├── CrearAccesoDirecto.ps1       desbloquea los ficheros y crea el acceso directo
 ├── docs
 │   ├── VaporeraArcade.ico       icono del acceso directo y de la ventana
-│   └── captura.png              la captura de este README
+│   └── captura*.png             las capturas de este README
 └── lib
     ├── Config.ps1               ajustes del usuario (config.json en %LOCALAPPDATA%)
     ├── Vdf.ps1                  lectura y escritura del formato VDF binario y cálculo del appid
@@ -328,6 +336,10 @@ instalar la versión 5.
 
 ## Historial de versiones
 
+- **1.0** (28-09-2026): añadir o quitar varios juegos a la vez cerrando Steam una sola vez.
+  En la vista previa, cargar una imagen propia o elegir el juego correcto cuando la búsqueda
+  acierta con otro. La Store se consulta con el país y el idioma de Windows, los DLC de Xbox
+  ya no salen como juegos, la ventana es más grande y hay un README en inglés.
 - **0.9** (26-09-2026): galería en la vista previa para cambiar la portada, la cápsula, el
   hero o el logo por otro de la Store o de SteamGridDB. La ventana ya no se congela al
   preparar las carátulas y se puede cancelar. GOG probado con juegos reales, incluidos los
