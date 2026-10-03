@@ -108,7 +108,8 @@ function Write-BinaryVdf {
     if (Test-Path -LiteralPath $Path) {
         # si Replace no puede (sistema de ficheros raro, permisos), al menos los bytes buenos
         # ya estan en disco: el renombrado a pelo deja una ventana minuscula, no un truncado
-        try { [System.IO.File]::Replace($tmp, $Path, $null) }
+        # sin copia de seguridad: $null llegaria como '' y Replace lanzaria siempre
+        try { [System.IO.File]::Replace($tmp, $Path, [NullString]::Value) }
         catch { Move-Item -LiteralPath $tmp -Destination $Path -Force }
     } else {
         Move-Item -LiteralPath $tmp -Destination $Path

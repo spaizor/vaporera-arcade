@@ -632,4 +632,29 @@ Describe 'New-CaratulasSteam con el juego elegido a mano' {
         [void](New-CaratulasSteam -Juego (New-JuegoPrueba) -AppId 42 -GridDir $grid -OrigenArte 'Local' -SgdbIdElegido '77')
         Should -Invoke Get-SgdbImagenes -Times 1 -Exactly -ParameterFilter { $SgdbId -eq '77' }
     }
+    It 'el de la Store, con el origen en solo la Store, no pregunta a SteamGridDB' {
+        [void](New-CaratulasSteam -Juego (New-JuegoPrueba) -AppId 42 -GridDir $grid -OrigenArte 'Store' -StoreIdElegido '9VAL')
+        Should -Invoke Get-StoreImagenes -Times 1 -Exactly -ParameterFilter { $StoreId -eq '9VAL' }
+        Should -Invoke Get-SgdbImagenes -Times 0 -Exactly
+    }
+}
+
+Describe 'Test-ElegidoConOrigen' {
+    # El juego elegido a mano que hay guardado, frente al origen del desplegable
+    It 'el de <Fuente> con el origen en <Origen>: <Esperado>' -ForEach @(
+        @{ Fuente = 'Microsoft Store'; Origen = 'Automatico';  Esperado = $true }
+        @{ Fuente = 'SteamGridDB';     Origen = 'Automatico';  Esperado = $true }
+        @{ Fuente = 'Microsoft Store'; Origen = 'Store';       Esperado = $true }
+        @{ Fuente = 'SteamGridDB';     Origen = 'Store';       Esperado = $false }
+        @{ Fuente = 'Microsoft Store'; Origen = 'SteamGridDB'; Esperado = $false }
+        @{ Fuente = 'SteamGridDB';     Origen = 'SteamGridDB'; Esperado = $true }
+        # con solo las imagenes del juego no se consulta nada por internet
+        @{ Fuente = 'Microsoft Store'; Origen = 'Local';       Esperado = $false }
+        @{ Fuente = 'SteamGridDB';     Origen = 'Local';       Esperado = $false }
+    ) {
+        Test-ElegidoConOrigen -Fuente $Fuente -OrigenArte $Origen | Should -Be $Esperado
+    }
+    It 'sin decir el origen vale, que es el automático' {
+        Test-ElegidoConOrigen -Fuente 'SteamGridDB' | Should -BeTrue
+    }
 }

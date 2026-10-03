@@ -24,6 +24,22 @@ BeforeAll {
     }
 }
 
+Describe 'New-Juego' {
+    It 'guarda aparte las opciones con las que se detectó, que no cambian al editar LaunchOptions' {
+        $j = New-Juego -Nombre 'Rayman Origins' -Fuente 'Ubisoft Connect' -Exe 'C:\Ubi\UbisoftConnect.exe' `
+                -StartDir 'C:\Ubi\' -LaunchOptions 'uplay://launch/80/0'
+        $j.OpcionesOrigen | Should -BeExactly 'uplay://launch/80/0'
+        # lo que hace la ventana al preparar: escribe en el juego las opciones del cuadro de texto
+        $j.LaunchOptions = 'uplay://launch/80/0 -otra'
+        $j.OpcionesOrigen | Should -BeExactly 'uplay://launch/80/0'
+        # y la copia que se manda al otro runspace la conserva
+        $j.PSObject.Copy().OpcionesOrigen | Should -BeExactly 'uplay://launch/80/0'
+    }
+    It 'sin opciones, las de origen son la cadena vacía' {
+        (New-Juego -Nombre 'Juego' -Fuente 'Manual' -Exe 'C:\Juegos\Juego.exe' -StartDir 'C:\Juegos\').OpcionesOrigen | Should -BeExactly ''
+    }
+}
+
 Describe 'Test-EpicEsJuego' {
     It '<Caso>: <Esperado>' -ForEach @(
         @{ Caso = 'juego';                        Esperado = $true;  M = @{ AppName = 'a'; AppCategories = @('public', 'games', 'applications') } }

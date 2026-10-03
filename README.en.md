@@ -68,7 +68,10 @@ powershell -ExecutionPolicy Bypass -STA -File .\VaporeraArcade.ps1
    cancels while it works.
 4. To change an image, click it. The window that opens shows other options; it also has
    **Cargar imagen…** (load your own image) and **Elegir otro juego…** (search for the right
-   game when the artwork belongs to a different one).
+   game when the artwork belongs to a different one). That choice is remembered, even after
+   closing the app: from then on the artwork of that game comes from the one you picked,
+   which is shown above the *Origen de las carátulas* list (*Elegido a mano*, "picked by
+   hand"). Click **Olvidar** ("forget") next to it to go back to searching by name.
 5. Click **2. Añadir a Steam** ("add to Steam"). The app closes Steam, adds the game, copies
    the images and opens Steam again.
 
@@ -97,7 +100,8 @@ There is no server and no telemetry. The app only talks to the Microsoft Store c
 to `www.steamgriddb.com`, sending the game name or Store id, your Windows country and language,
 and your SteamGridDB key.
 
-Everything it keeps stays on your PC: settings and the SteamGridDB key (in plain text) in
+Everything it keeps stays on your PC: the SteamGridDB key (in plain text) and the games you
+picked by hand for the artwork (each with the path of the game's executable) in
 `%LOCALAPPDATA%\VaporeraArcade\config.json`, and a log in the same folder. The log contains
 full paths, installed game names and your Steam profile id: review it before sharing it.
 

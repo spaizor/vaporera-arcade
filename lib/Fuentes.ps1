@@ -1,7 +1,7 @@
 ﻿# =====================================================================
 #  Fuentes.ps1 - Deteccion de juegos instalados por origen
 #  Devuelve objetos con: Nombre, Fuente, Exe, StartDir, LaunchOptions,
-#                        Icono, StoreId, Carpeta, Detalle
+#                        Icono, StoreId, Carpeta, Detalle, OpcionesOrigen
 # =====================================================================
 
 function New-Juego {
@@ -23,6 +23,11 @@ function New-Juego {
         Fecha         = $Fecha
         YaEnSteam     = $false
         AppId         = [uint32]0
+        # Las opciones tal como se detectaron. LaunchOptions se puede editar en la ventana y
+        # esta copia no se toca: con el exe dice que juego es (los de Epic y de Ubisoft
+        # comparten el exe del lanzador), y por los dos se reconoce al guardar el juego
+        # elegido a mano para las caratulas (Config.ps1).
+        OpcionesOrigen = $LaunchOptions
     }
 }
 

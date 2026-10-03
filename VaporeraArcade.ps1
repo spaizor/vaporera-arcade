@@ -735,7 +735,18 @@ if (Test-Path -LiteralPath $icoApp) {
                Background="#FF1E2127" Foreground="#FFE6E8EC" BorderBrush="#FF3A3F49"/>
       <TextBlock Name="TxtDetalle" FontSize="11" Foreground="#FF8A909B" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
-      <TextBlock Text="Origen de las carátulas" FontSize="11" Foreground="#FF8A909B"/>
+      <!-- A la derecha, solo si el juego tiene uno elegido a mano en la galeria (guardado en
+           config.json): con el no se busca por el nombre. Los margenes negativos del boton son
+           para que la fila no crezca: la vista previa de debajo cabe justa en la ventana. -->
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Left" Text="Origen de las carátulas" FontSize="11" Foreground="#FF8A909B"
+                   VerticalAlignment="Center"/>
+        <Button Name="BtnOlvidar" DockPanel.Dock="Right" Content="Olvidar" FontSize="11" Padding="8,0"
+                Margin="8,-3,0,-3" VerticalAlignment="Center" Visibility="Collapsed"
+                ToolTip="Olvida el juego elegido a mano: las carátulas se vuelven a buscar por el nombre"/>
+        <TextBlock Name="TxtElegido" FontSize="11" Foreground="#FF8A909B" Margin="12,0,0,0"
+                   TextAlignment="Right" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+      </DockPanel>
       <ComboBox Name="CmbOrigenArte" Margin="0,3,0,12" SelectedIndex="0">
         <ComboBoxItem Tag="Automatico"  Content="Automático: Store, luego SteamGridDB, luego las del juego"/>
         <ComboBoxItem Tag="Store"       Content="Solo Microsoft Store"/>
@@ -817,7 +828,8 @@ if ($win.Width -gt $areaUtil.Width) { $win.Width = $areaUtil.Width }
 
 $ctl = @{}
 foreach ($n in @('TxtVersion','TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
-                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','CmbOrigenArte','BtnPreparar','BtnAnadir','BtnQuitar','PrgPreparar','TxtOrigenArte',
+                 'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','TxtElegido','BtnOlvidar','CmbOrigenArte',
+                 'BtnPreparar','BtnAnadir','BtnQuitar','PrgPreparar','TxtOrigenArte',
                  'ImgPortada','ImgCapsula','ImgHero','ImgLogo','ImgIcono','BrdPortada','BrdCapsula','BrdHero','BrdLogo',
                  'ChkBigPicture','ChkReemplazar','TxtLog','TxtMarcados','BtnAnadirMarcados','BtnQuitarMarcados','BtnDesmarcar')) {
     $ctl[$n] = $win.FindName($n)
@@ -838,6 +850,12 @@ $script:DentroDeTareas = $false   # Update-Tareas en marcha: que no se meta otro
 $script:Galeria = $null           # la ventana de elegir imagen, mientras esta abierta
 $script:Visibles = New-Object System.Collections.ArrayList   # los de la lista con el filtro de ahora
 $script:Lote = $null              # los juegos de "Anadir marcados" mientras se preparan
+# Los juegos elegidos a mano en la galeria, lo guardado en config.json: se lee aqui y solo
+# cambia al guardar uno (Save-Elegido) o al olvidarlo (Invoke-Olvidar). Si no se puede leer,
+# se arranca igual, sin ninguno.
+$script:Elegidos = @()
+try { $script:Elegidos = @(Get-JuegosElegidos) }
+catch { Write-Registro "No he podido leer los juegos elegidos a mano: $($_.Exception.Message)" }
 
 # Escribe en el registro y en la ventana SIN bombear mensajes. Es lo que se usa donde no se
 # puede dejar que WPF atienda nada en medio: el tic del reloj de las tareas y el cierre.
@@ -865,7 +883,7 @@ function Update-Interfaz {
 # Lo que se desactiva mientras dura una operacion larga. El cuadro del registro NO esta en la
 # lista: es lo unico que el usuario mira mientras espera, y desactivado se lee gris.
 $ControlesInteractivos = @('BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar',
-                           'LstJuegos','TxtNombre','TxtOpciones','CmbOrigenArte','BtnPreparar','BtnAnadir',
+                           'LstJuegos','TxtNombre','TxtOpciones','BtnOlvidar','CmbOrigenArte','BtnPreparar','BtnAnadir',
                            'BtnQuitar','ChkBigPicture','ChkReemplazar','BtnAnadirMarcados','BtnQuitarMarcados',
                            'BtnDesmarcar')
 
@@ -902,6 +920,7 @@ function Update-Botones {
         if ($ocultos) { $texto += " ($ocultos no se ven con el filtro)" }
         $ctl.TxtMarcados.Text = "$texto."
     }
+    Update-Elegido
 }
 
 function Get-Marcados { return @($script:Todos | Where-Object { $_ -and $_.Marcado }) }
@@ -1063,6 +1082,123 @@ function Clear-Preview {
     $ctl.TxtOrigenArte.Text = ''
 }
 
+# --- el juego elegido a mano, recordado --------------------------------
+# El juego escogido en la galeria ("Elegir otro juego...") se guarda en config.json
+# (lib\Config.ps1) y la proxima vez que se preparan las caratulas de ese juego se usa sin buscar
+# por el nombre. Encima del desplegable del origen sale cual es, con el boton de olvidarlo.
+
+# El origen del desplegable
+function Get-OrigenArte {
+    $origenArte = [string]$ctl.CmbOrigenArte.SelectedItem.Tag
+    if (-not $origenArte) { $origenArte = 'Automatico' }
+    return $origenArte
+}
+
+# El juego del que se habla: el de la vista previa (Refrescar deja la lista sin seleccion y lo
+# preparado sigue ahi) o, sin nada preparado, el seleccionado
+function Get-JuegoActual {
+    if ($script:Preparado) { return $script:Preparado.Juego }
+    return $ctl.LstJuegos.SelectedItem
+}
+
+# El elegido a mano que hay guardado para $Juego, o $null. El juego se reconoce por su exe y
+# por las opciones con las que se detecto, no por las del cuadro de texto, que se editan.
+function Get-ElegidoGuardado {
+    param($Juego)
+    if (-not $Juego) { return $null }
+    return (Find-JuegoElegido -Lista $script:Elegidos -Exe $Juego.Exe -Opciones ([string]$Juego.OpcionesOrigen))
+}
+
+# Con que juego hay que preparar las caratulas de $Juego: con el elegido guardado, si el
+# origen lo deja. Devuelve Elegido ($null si no hay o no vale) y Aviso, lo que hay que decir
+# en el registro ('' si no hay nada guardado).
+function Get-ElegidoParaPreparar {
+    param($Juego, [string]$OrigenArte)
+    $e = Get-ElegidoGuardado $Juego
+    if (-not $e) { return [pscustomobject]@{ Elegido = $null; Aviso = '' } }
+    if (Test-ElegidoConOrigen -Fuente $e.Fuente -OrigenArte $OrigenArte) {
+        return [pscustomobject]@{
+            Elegido = $e
+            Aviso   = "  con el juego elegido a mano que hay guardado: '$($e.Titulo)' ($($e.Fuente)). No se busca por el nombre; para volver a hacerlo, «Olvidar»."
+        }
+    }
+    return [pscustomobject]@{
+        Elegido = $null
+        Aviso   = "  hay un juego elegido a mano ('$($e.Titulo)', $($e.Fuente)), pero no se usa: el origen está en «$($ctl.CmbOrigenArte.SelectedItem.Content)»."
+    }
+}
+
+# Los dos parametros de New-CaratulasSteam para el juego elegido a mano (vacios si no hay)
+function Get-IdsElegido {
+    param($Elegido)
+    $ids = @{ StoreIdElegido = ''; SgdbIdElegido = '' }
+    if ($Elegido) {
+        if ($Elegido.Fuente -eq 'SteamGridDB') { $ids.SgdbIdElegido = [string]$Elegido.Id }
+        else { $ids.StoreIdElegido = [string]$Elegido.Id }
+    }
+    return $ids
+}
+
+# Guarda en config.json el juego elegido a mano para $Juego. Devuelve lo que hay que anadir al
+# registro: si no se puede guardar, la eleccion vale igual para esta preparacion.
+function Save-Elegido {
+    param($Juego, $Elegido)
+    try {
+        $script:Elegidos = @(Set-JuegoElegido -Exe $Juego.Exe -Opciones ([string]$Juego.OpcionesOrigen) `
+                                -Fuente $Elegido.Fuente -Id ([string]$Elegido.Id) -Titulo ([string]$Elegido.Titulo))
+        return 'Queda guardado para las próximas veces.'
+    } catch {
+        Write-RegistroError -Contexto 'guardar el juego elegido' -Fallo $_
+        return "No he podido guardarlo ($($_.Exception.Message)): solo vale para esta vez."
+    }
+}
+
+# La linea de encima del desplegable del origen: el elegido a mano del juego de ahora y el
+# boton de olvidarlo. Avisa si con el origen del desplegable no se va a usar.
+function Update-Elegido {
+    $e = Get-ElegidoGuardado (Get-JuegoActual)
+    if (-not $e) {
+        $ctl.TxtElegido.Text = ''
+        $ctl.TxtElegido.ToolTip = $null
+        $ctl.BtnOlvidar.Visibility = 'Collapsed'
+        return
+    }
+    $texto = "Elegido a mano: «$($e.Titulo)» ($($e.Fuente))"
+    $ayuda = 'Las carátulas de este juego salen del que elegiste en la galería, sin buscar por el nombre.'
+    if (-not (Test-ElegidoConOrigen -Fuente $e.Fuente -OrigenArte (Get-OrigenArte))) {
+        $texto += ', no se usa con este origen'
+        $ayuda = 'Con el origen de abajo no se usa el juego que elegiste en la galería. Con «Automático», sí.'
+    }
+    $ctl.TxtElegido.Text = $texto
+    # entero, por si la linea no cabe y sale cortada
+    $ctl.TxtElegido.ToolTip = "$texto.`r`n$ayuda"
+    $ctl.BtnOlvidar.Visibility = 'Visible'
+}
+
+# "Olvidar": quita de config.json el elegido a mano del juego de ahora, y sus caratulas se
+# vuelven a buscar por el nombre. Lo que haya en la vista previa, si salio de el, ya no vale.
+function Invoke-Olvidar {
+    $j = Get-JuegoActual
+    $e = Get-ElegidoGuardado $j
+    if (-not $e) { return }
+    try {
+        $script:Elegidos = @(Remove-JuegoElegido -Exe $j.Exe -Opciones ([string]$j.OpcionesOrigen))
+    } catch {
+        Add-Log "ERROR olvidando el juego elegido a mano: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'olvidar el juego elegido' -Fallo $_
+        return
+    }
+    $nombre = $j.Nombre
+    $rehacer = $false
+    if ($script:Preparado) {
+        $nombre = $script:Preparado.Nombre
+        if ($script:Preparado.Elegido) { Clear-Preview; $rehacer = $true }
+    }
+    $texto = "Olvidado el juego elegido a mano («$($e.Titulo)»): las carátulas de '$nombre' se vuelven a buscar por el nombre."
+    if ($rehacer) { $texto += ' Hay que prepararlas otra vez.' }
+    Add-Log $texto
+}
+
 # Ventana de ajustes: por ahora solo la clave de SteamGridDB
 function Show-Ajustes {
     [xml]$xamlAjustes = @'
@@ -1189,6 +1325,10 @@ $ctl.TxtNombre.Add_TextChanged({
     if ($script:Preparado) { Clear-Preview; Add-Log 'El nombre ha cambiado: hay que preparar las carátulas otra vez.' }
 })
 
+$ctl.BtnOlvidar.Add_Click({ Invoke-Ocupado { Invoke-Olvidar } })
+# el elegido a mano puede no valer con el origen nuevo: la linea de encima lo dice
+$ctl.CmbOrigenArte.Add_SelectionChanged({ Update-Elegido })
+
 # --- trabajo en segundo plano ------------------------------------------
 # Las tareas de lib\Tareas.ps1 corren en otro runspace; este reloj, en el hilo de la UI, pasa
 # al registro lo que van contando y recoge las que acaban. Solo anda mientras haya alguna.
@@ -1203,6 +1343,8 @@ function Update-Tareas {
     $script:DentroDeTareas = $true
     try {
         foreach ($t in @($script:Tareas)) {
+            # antes de vaciar la cola: si acaba entre medias, su ultima linea se quedaria fuera
+            $acabada = $t.Handle.IsCompleted
             $lineas = @(Get-TareaLineas $t)
             $avisos = @(Get-TareaAvisos $t)
             # lo que cuente una tarea cancelada ya no viene a cuento
@@ -1210,7 +1352,7 @@ function Update-Tareas {
                 foreach ($l in $lineas) { Write-LogVentana $l }
                 if ($t.Datos.AlAvisar) { foreach ($a in $avisos) { & $t.Datos.AlAvisar $t $a } }
             }
-            if (-not $t.Handle.IsCompleted) { continue }
+            if (-not $acabada) { continue }
             $script:Tareas.Remove($t)
             $salida = Complete-TareaFondo $t
             if (-not $salida.Cancelada -and $t.Datos.AlTerminar) { & $t.Datos.AlTerminar $t $salida }
@@ -1228,12 +1370,14 @@ function Update-Tareas {
 # plano: la ventana sigue respondiendo y el boton pasa a ser el de cancelar. Todo lo demas se
 # queda desactivado hasta que acabe, igual que con Invoke-Ocupado.
 # $Elegido es el juego escogido a mano en la galeria (un resultado de Get-CandidatosJuego):
-# con el no se busca por el nombre, y manda sobre el origen elegido en la lista.
+# con el no se busca por el nombre, manda sobre el origen elegido en la lista y se guarda para
+# las proximas veces. Sin $Elegido se usa el guardado, si lo hay y el origen lo deja.
 function Start-Preparar {
     param($Elegido = $null)
     if (-not (Enter-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Cancelar')) { return }
     $lanzada = $false
     try {
+        $deLaGaleria = [bool]$Elegido
         if ($Elegido -and $script:Preparado) {
             # El juego es el de la galeria, no el de la lista: Refrescar deja la lista sin
             # seleccion y lo preparado sigue ahi (y antes esto se quedaba en 'Elige un juego')
@@ -1250,13 +1394,16 @@ function Start-Preparar {
         # lo preparado antes para este juego se borra aqui abajo: que no quede a mano para anadir
         Clear-Preview
         $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $j.Exe + '"') -AppName $nombre
-        $origenArte = [string]$ctl.CmbOrigenArte.SelectedItem.Tag
-        if (-not $origenArte) { $origenArte = 'Automatico' }
-        $storeElegido = ''; $sgdbElegido = ''
-        if ($Elegido) {
-            if ($Elegido.Fuente -eq 'SteamGridDB') { $sgdbElegido = [string]$Elegido.Id } else { $storeElegido = [string]$Elegido.Id }
+        $origenArte = Get-OrigenArte
+        $avisoElegido = ''
+        if ($deLaGaleria) {
             $origenArte = 'Automatico'
+        } else {
+            $guardado = Get-ElegidoParaPreparar -Juego $j -OrigenArte $origenArte
+            $Elegido = $guardado.Elegido
+            $avisoElegido = $guardado.Aviso
         }
+        $ids = Get-IdsElegido $Elegido
         # Cada preparacion en su carpeta: una cancelada sigue hasta que vuelve la descarga en
         # curso y podria escribir encima de la siguiente del mismo appid. Las de antes de este
         # appid ya no valen (la de una cancelada, si aun escribe, se poda en Remove-TempViejo).
@@ -1268,11 +1415,17 @@ function Start-Preparar {
         $destino = Join-Path $TempDir ('{0}-{1}' -f $appId, (Get-Date -Format 'HHmmssfff'))
 
         Add-Log "Preparando carátulas de '$nombre' (AppId $appId). Puedes cancelarlo con el mismo botón."
-        if ($Elegido) { Add-Log "  con el juego elegido a mano: '$($Elegido.Titulo)' ($($Elegido.Fuente))" }
+        if ($deLaGaleria) {
+            # Se guarda ya, y no al acabar: si la preparacion falla o se cancela, lo elegido
+            # sigue valiendo para el siguiente intento
+            $avisoElegido = "  con el juego elegido a mano: '$($Elegido.Titulo)' ($($Elegido.Fuente)). " + (Save-Elegido -Juego $j -Elegido $Elegido)
+            Update-Elegido
+        }
+        if ($avisoElegido) { Add-Log $avisoElegido }
         # una copia del juego: el otro hilo no tiene por que compartir el objeto de la lista
         $script:Tarea = Start-TareaFondo -Lib $LibPreparar -Parametros @{
                 Juego = $j.PSObject.Copy(); AppId = $appId; Destino = $destino; Nombre = $nombre; OrigenArte = $origenArte
-                StoreIdElegido = $storeElegido; SgdbIdElegido = $sgdbElegido
+                StoreIdElegido = $ids.StoreIdElegido; SgdbIdElegido = $ids.SgdbIdElegido
             } -Datos @{ Juego = $j; Nombre = $nombre; AppId = $appId; Carpeta = $destino; Elegido = $Elegido
                         TextoCancelado = 'Cancelado: no se ha preparado nada.'
                         AlTerminar = { param($t, $s) Complete-Preparar $t $s } } `
@@ -1309,12 +1462,14 @@ function Complete-Preparar {
         $d = $Tarea.Datos
         # StoreId, SgdbId e IconoDe son para la galeria: no repetir busquedas y saber cuando
         # rehacer el icono. Alternativas guarda lo ya buscado de cada hueco. Busqueda es con que
-        # se busca en SteamGridDB (el titulo del juego elegido a mano, si lo hay).
+        # se busca en SteamGridDB (el titulo del juego elegido a mano, si lo hay). Elegido es el
+        # juego elegido a mano del que han salido ($null si se ha buscado por el nombre).
         $busqueda = [string]$c.Busqueda
         if (-not $busqueda) { $busqueda = $d.Nombre }
         $script:Preparado = @{ Juego = $d.Juego; Nombre = $d.Nombre; AppId = $d.AppId; Rutas = $c.Rutas
                                Carpeta = $d.Carpeta; StoreId = [string]$c.StoreId; SgdbId = [string]$c.SgdbId
-                               IconoDe = [string]$c.IconoDe; Alternativas = @{}; Busqueda = $busqueda }
+                               IconoDe = [string]$c.IconoDe; Alternativas = @{}; Busqueda = $busqueda
+                               Elegido = $d.Elegido }
         Update-VistaPrevia
         $texto = "Carátulas: $($c.Origen)"
         if ($d.Elegido) { $texto += ", del juego elegido a mano («$($d.Elegido.Titulo)»)" }
@@ -1469,7 +1624,8 @@ function Complete-Galeria {
 # Cuando la busqueda por el nombre acierta con otro juego (o con ninguno, como 'ACValhalla'),
 # desde la galeria se abre esta ventana: busca en la Store y en SteamGridDB con lo que se
 # escriba y deja elegir. Devuelve el elegido (un resultado de Get-CandidatosJuego) o $null, y
-# quien la abre prepara otra vez todas las caratulas con el. El nombre en Steam no cambia.
+# quien la abre prepara otra vez todas las caratulas con el y lo guarda para las proximas veces
+# (Start-Preparar). El nombre en Steam no cambia.
 $script:ElegirJuego = $null   # la ventana, mientras esta abierta
 
 function Start-BuscarJuego {
@@ -1562,7 +1718,7 @@ function Show-ElegirJuego {
     </Grid.RowDefinitions>
     <TextBlock Name="TxtTitulo" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
     <TextBlock Grid.Row="1" FontSize="11" Foreground="#FF8A909B" Margin="0,4,0,10" TextWrapping="Wrap"
-               Text="Si las carátulas son de otro juego, búscalo y elige el bueno: se preparan otra vez todas con él. El nombre en Steam no cambia."/>
+               Text="Si las carátulas son de otro juego, búscalo y elige el bueno: se preparan otra vez todas con él, y se recuerda para las próximas veces. El nombre en Steam no cambia."/>
     <Grid Grid.Row="2">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*"/>
@@ -1691,7 +1847,7 @@ function Show-Galeria {
     </ScrollViewer>
     <Grid Grid.Row="4" Margin="0,10,0,0">
       <Button Name="BtnOtroJuego" Content="Elegir otro juego..." HorizontalAlignment="Left"
-              ToolTip="Si las imágenes son de otro juego: búscalo, elige el bueno y se preparan otra vez todas"/>
+              ToolTip="Si las imágenes son de otro juego: búscalo, elige el bueno y se preparan otra vez todas. El elegido se recuerda"/>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
         <Button Name="BtnCargar" Content="Cargar imagen..." Margin="0,0,8,0"
                 ToolTip="Usar una imagen tuya (PNG, JPG, BMP o GIF). Se recorta a la medida del hueco."/>
@@ -1899,6 +2055,7 @@ $ctl.BtnQuitar.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitar' -TextoOcupado 'Quit
 # segundo plano (como "1. Preparar", y se cancela con ese mismo boton) y solo entonces se
 # cierra Steam, una vez. El seleccionado va con el nombre y las opciones de los cuadros de
 # texto, y el que tenga la vista previa preparada, con esas imagenes (lo elegido en la galeria).
+# Los demas se preparan con su juego elegido a mano, si tienen uno guardado.
 
 # La casilla ya ha escrito en Marcado cuando llega el Click: solo falta la cuenta
 $ctl.LstJuegos.AddHandler([Windows.Controls.Primitives.ButtonBase]::ClickEvent, [Windows.RoutedEventHandler]{
@@ -1937,8 +2094,7 @@ function Start-AnadirMarcados {
     $lanzada = $false
     try {
         $sel = $ctl.LstJuegos.SelectedItem
-        $origenArte = [string]$ctl.CmbOrigenArte.SelectedItem.Tag
-        if (-not $origenArte) { $origenArte = 'Automatico' }
+        $origenArte = Get-OrigenArte
         $hora = Get-Date -Format 'HHmmssfff'
         $lote = @()
         $pendientes = @()
@@ -1960,8 +2116,13 @@ function Start-AnadirMarcados {
                 # se va a saltar (Invoke-AnadirJuegos lo vuelve a mirar): no hace falta prepararlo
             } else {
                 $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $juego.Exe + '"') -AppName $nombre
+                # el juego elegido a mano que tenga guardado, igual que en "1. Preparar"
+                $guardado = Get-ElegidoParaPreparar -Juego $j -OrigenArte $origenArte
+                $ids = Get-IdsElegido $guardado.Elegido
                 $pendientes += @{ Indice = $i; Juego = $juego; Nombre = $nombre; AppId = $appId
-                                  Destino = (Join-Path $TempDir ('{0}-{1}' -f $appId, $hora)) }
+                                  Destino = (Join-Path $TempDir ('{0}-{1}' -f $appId, $hora))
+                                  StoreIdElegido = $ids.StoreIdElegido; SgdbIdElegido = $ids.SgdbIdElegido
+                                  AvisoElegido = $guardado.Aviso }
             }
             $lote += $x
         }
@@ -1985,9 +2146,10 @@ function Start-AnadirMarcados {
                 foreach ($p in @($Pendientes)) {
                     $n++
                     & $Log "[$n/$total] $($p.Nombre)" | Out-Null
+                    if ($p.AvisoElegido) { & $Log $p.AvisoElegido | Out-Null }
                     try {
                         $c = New-CaratulasSteam -Juego $p.Juego -AppId $p.AppId -GridDir $p.Destino -NombreFinal $p.Nombre `
-                                 -OrigenArte $OrigenArte -Log $Log
+                                 -OrigenArte $OrigenArte -StoreIdElegido $p.StoreIdElegido -SgdbIdElegido $p.SgdbIdElegido -Log $Log
                         $salida.Add([pscustomobject]@{ Indice = $p.Indice; Rutas = $c.Rutas })
                     } catch {
                         & $Log "  no se han podido preparar: $($_.Exception.Message)" | Out-Null

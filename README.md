@@ -114,6 +114,13 @@ powershell -ExecutionPolicy Bypass -STA -File .\VaporeraArcade.ps1
      SteamGridDB con el nombre que escribas, y al elegir el bueno se preparan otra vez todas las
      carátulas con él. El nombre con el que aparece en Steam no cambia.
 
+     **La elección se recuerda**, también al cerrar la aplicación: la próxima vez que prepares
+     ese juego se usa el elegido, sin buscar por el nombre. Encima del desplegable *Origen de
+     las carátulas* sale cuál es (*Elegido a mano: «…»*) y, a su lado, el botón **Olvidar**,
+     que lo borra para volver a buscar por el nombre. El juego se reconoce por su ejecutable y
+     por las opciones de lanzamiento con las que se detectó: la elección sigue valiendo aunque
+     le cambies el nombre, pero no si lo reinstalas en otra carpeta.
+
    ![La galería de la portada de un juego: la actual y las demás de la Store y de SteamGridDB, con los botones «Elegir otro juego…» y «Cargar imagen…» debajo](docs/captura-galeria.png)
 
    ![La ventana «Elegir el juego»: un cuadro de búsqueda y la lista de resultados de la Store y de SteamGridDB, con el parecido de cada uno y el juego de ahora marcado](docs/captura-elegir.png)
@@ -128,9 +135,10 @@ Para deshacerlo, **Quitar de Steam** (ver *Quitar un juego*).
 vez, con una sola copia de seguridad. Al añadir, primero se preparan las carátulas de cada uno
 en segundo plano (se cancela con el mismo botón que *1. Preparar carátulas*); el juego que
 tengas en la vista previa usa las imágenes que hayas elegido en ella, y el seleccionado, el
-nombre y las opciones que hayas escrito. Los que ya están en Steam se saltan, salvo que marques
-*Reemplazar si ya existe*. Si uno falla, los demás siguen, y al final el registro muestra un
-resumen. Marcar un juego no lo selecciona.
+nombre y las opciones que hayas escrito. Los que tengan un juego elegido a mano se preparan
+con él. Los que ya están en Steam se saltan, salvo que marques *Reemplazar si ya existe*. Si
+uno falla, los demás siguen, y al final el registro muestra un resumen. Marcar un juego no lo
+selecciona.
 
 Casillas de la parte inferior:
 
@@ -164,7 +172,7 @@ trae la carátula de otro programa, y buscar `Forza Horizon 5` no devuelve la de
 Horizon 6`. Lo descartado queda anotado en el registro. El precio es que un juego cuyo nombre
 detectado no se parece al real (un programa reciente sale con el nombre de su ejecutable) se
 queda con las imágenes que trae instaladas; para esos casos está **Elegir otro juego…** en la
-vista previa.
+vista previa, y lo que elijas ahí se recuerda.
 
 El catálogo de la Store se consulta con el país y el idioma de la configuración regional de
 Windows, así que los títulos y el arte llegan en tu idioma. Si la Store no conoce ese país, se
@@ -181,6 +189,11 @@ Con el desplegable **Origen de las carátulas** puedes forzar de dónde salen:
 
 Esto decide lo que sale al preparar. Después, en la vista previa, cada imagen se puede cambiar
 por otra de la Store o de SteamGridDB, sea cual sea el origen elegido.
+
+Si el juego tiene uno elegido a mano (ver *Elegir otro juego…*), se usa con *Automático* y con
+el *Solo…* del sitio del que salió. Con los otros orígenes manda el desplegable: la línea de
+encima avisa de que *no se usa con este origen*, y con *Solo imágenes del propio juego* sigue
+sin consultarse nada por internet.
 
 Imágenes que se generan en `Steam\userdata\<usuario>\config\grid\`:
 
@@ -238,7 +251,11 @@ que después pulses una imagen de la vista previa para elegir otra.
 **Qué se guarda en tu equipo:**
 
 - `%LOCALAPPDATA%\VaporeraArcade\config.json`: tu clave de SteamGridDB, **en texto plano**.
-  No está cifrada ni ofuscada. Si compartes ese fichero, compartes la clave.
+  No está cifrada ni ofuscada. Si compartes ese fichero, compartes la clave. Y, por cada juego
+  al que le hayas elegido a mano de qué juego son las carátulas, la **ruta de su ejecutable**
+  (que puede incluir tu nombre de usuario de Windows), sus opciones de lanzamiento y el juego
+  elegido: si es de la Store o de SteamGridDB, su identificador y su título. Cada uno se borra
+  con el botón **Olvidar**.
 - `%LOCALAPPDATA%\VaporeraArcade\vaporera-arcade.log`: el registro de actividad. Contiene
   **rutas completas** (que incluyen tu nombre de usuario de Windows), los nombres de los juegos
   que tienes instalados y el **identificador de tu perfil de Steam**. Míralo antes de pegarlo
@@ -305,7 +322,8 @@ Vaporera Arcade
 ```
 
 Los ajustes y el registro de actividad se guardan fuera de la carpeta de la aplicación, en
-`%LOCALAPPDATA%\VaporeraArcade\`: `config.json` (la clave de SteamGridDB) y
+`%LOCALAPPDATA%\VaporeraArcade\`: `config.json` (la clave de SteamGridDB y los juegos elegidos
+a mano para las carátulas) y
 `vaporera-arcade.log`. Así funciona también instalada en una carpeta sin permiso de escritura,
 como `Archivos de programa`. Si algo falla, el detalle del error está en ese `.log`. La primera
 línea de cada arranque lleva la versión de la aplicación, la de PowerShell y la de Windows: es lo que conviene adjuntar al informar de un fallo. La versión también aparece
@@ -323,9 +341,9 @@ junto al nombre en la cabecera de la ventana.
 El repositorio tiene una carpeta `tests\` (no va en el ZIP de las releases) con tests de
 [Pester 5](https://pester.dev) para lo delicado: la lectura y escritura de `shortcuts.vdf`
 byte a byte, el cálculo del appid, los duplicados, añadir y quitar accesos directos, la
-limpieza de carátulas, la comparación de títulos y el trabajo en segundo plano. No tocan
-Steam: trabajan sobre ficheros temporales. Se lanzan desde Windows PowerShell 5.1, en la
-carpeta del repositorio:
+limpieza de carátulas, la comparación de títulos, los ajustes de `config.json` y el trabajo en
+segundo plano. No tocan Steam ni tus ajustes: trabajan sobre ficheros temporales. Se lanzan
+desde Windows PowerShell 5.1, en la carpeta del repositorio:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-Tests.ps1 -Detalle

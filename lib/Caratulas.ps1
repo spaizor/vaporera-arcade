@@ -883,6 +883,20 @@ function New-CaratulasSteam {
                               Busqueda = $busqueda }
 }
 
+# Si el juego elegido a mano que hay guardado (config.json) se puede usar con el origen del
+# desplegable. 'Solo ...' es una orden, y dice a que no se conecta: el guardado solo vale si
+# sale de ahi, y con 'Local' nunca. $Fuente es la del elegido (Get-CandidatosJuego).
+# El recien elegido en la galeria no pasa por aqui: ese manda sobre el origen.
+function Test-ElegidoConOrigen {
+    param([string]$Fuente, [string]$OrigenArte = 'Automatico')
+    switch ($OrigenArte) {
+        'Automatico'  { return $true }
+        'Store'       { return ($Fuente -ne 'SteamGridDB') }
+        'SteamGridDB' { return ($Fuente -eq 'SteamGridDB') }
+    }
+    return $false
+}
+
 # ---------------------------------------------------------------------
 #  Galeria de la vista previa: otras imagenes para un hueco y cambiar la elegida
 # ---------------------------------------------------------------------
