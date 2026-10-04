@@ -30,6 +30,11 @@ so the game shows up in Big Picture like any other.
 - **Marks the games already in Steam**, backs up `shortcuts.vdf` before every write and
   restarts Steam when done (optionally in Big Picture).
 - **Removes** a game it added, together with its artwork.
+- **Works with the keyboard or an Xbox (or compatible) controller**, no mouse needed.
+- **Simple mode**: just the games, in large print, to tick them and add or remove them with
+  the controller.
+- **Adds itself to Steam**, with its own artwork, so you can open it from Big Picture with the
+  controller.
 
 ## Requirements
 
@@ -37,6 +42,7 @@ so the game shows up in Big Picture like any other.
 - Steam installed, with at least one account that has logged in on the PC.
 - An internet connection for the artwork. Without it, the artwork is built from the images
   that come with the game.
+- Optional: an Xbox controller or one compatible with XInput (many have an "X-input" mode).
 
 ## Installation
 
@@ -83,6 +89,36 @@ To add or remove several games at once, tick their boxes in the list and click *
 adding, the artwork of each game is prepared first (the prepare button becomes **Cancelar**,
 "cancel"); games already in Steam are skipped. The log ends with a summary.
 
+### Keyboard, controller and Big Picture
+
+Everything works without a mouse. Keyboard: Tab (and Shift+Tab) moves between controls, the
+arrows move through the list and the image gallery, **Enter** presses (and selects the game
+that has the focus), **Space** ticks a game, **Escape** closes the open window and **F4** opens
+the artwork source list.
+
+Controller: the D-pad or left stick moves (holding repeats), **A** presses whatever has the
+focus, **B** closes, **X** ticks a game in the list, **LB / RB** go to the previous / next
+control. The controller only drives the app while its window is in front. Typing (name,
+search, SteamGridDB key) still needs a keyboard, real or Windows' on-screen one.
+
+**To open it from Big Picture**, click **Añadir Vaporera a Steam** ("add Vaporera to Steam"),
+top right: it adds the app to your library with its own artwork (Steam is restarted). The
+button goes away once it's added; if you move the app's folder it comes back as **Actualizar
+Vaporera en Steam** ("update") to fix the path. **Big Picture**, next to it, opens Steam in Big
+Picture and closes the app, like quitting a game.
+
+**Modo sencillo** ("simple mode"), top right, leaves only the games list in large print and
+two buttons, **Añadir marcados** ("add ticked") and **Quitar marcados** ("remove ticked").
+Tick games with **A** or **X** (Enter or Space on the keyboard) and press *Añadir marcados*.
+Only games from Xbox / Game Pass, Epic, GOG and Ubisoft are shown, and everything else (artwork
+source, Big Picture, replace) is taken from the full window, **Modo avanzado** ("advanced
+mode"). The app opens in the last mode you used. After adding successfully, the app **closes
+itself**, because the restarted Steam would cover it. If something fails, it stays open and
+says so below the buttons.
+
+In both modes, whenever adding or removing goes well and Steam is reopened in Big Picture
+(*Reabrir Steam en Big Picture*), the app closes too.
+
 ## Where the artwork comes from
 
 1. **Microsoft Store**, the official art, with no key needed. The catalog is queried with the
@@ -113,6 +149,8 @@ full paths, installed game names and your Steam profile id: review it before sha
   again with *Reemplazar si ya existe* ("replace if it exists") checked.
 - Steam has to be closed to edit `shortcuts.vdf`. The app closes it itself and cancels without
   changing anything if Steam doesn't close within 40 seconds.
+- The controller has to be XInput (Xbox or compatible). PlayStation and Switch controllers
+  work through Steam Input or tools like DS4Windows.
 
 ## Disclaimer
 

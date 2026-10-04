@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 # Version de la aplicacion. Sale en el titulo de la ventana, junto al nombre de la cabecera, en
 # la primera linea del registro y en el historial del README.md: los cuatro tienen que ir
 # sincronizados. El XAML es una cadena literal y no interpola: la ventana la pone por codigo.
-$AppVersion = '1.0'
+$AppVersion = '1.1'
 
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TempDir = Join-Path $env:TEMP 'VaporeraArcade'
@@ -99,6 +99,7 @@ if ($registroRotado) { Write-Registro "El registro anterior pasaba de 1 MB: se h
 . (Join-Path $Raiz 'lib\Caratulas.ps1')
 . (Join-Path $Raiz 'lib\SteamCtl.ps1')
 . (Join-Path $Raiz 'lib\Tareas.ps1')
+. (Join-Path $Raiz 'lib\Mando.ps1')
 
 # Lo que necesita New-CaratulasSteam en el runspace de "Preparar caratulas", que empieza vacio:
 # Config (la clave de SteamGridDB) y Fuentes (Get-LogoAppStore)
@@ -555,12 +556,35 @@ if (Test-Path -LiteralPath $icoApp) {
     catch { Write-Registro "No he podido cargar el icono de la ventana: $($_.Exception.Message)" }
 }
 
+# El recuadro del foco de teclado, el mismo en todas las ventanas: sus estilos lo piden como
+# {DynamicResource Foco} y Add-EstiloFoco se lo da al cargar cada una. WPF solo lo pinta
+# cuando se llega con el teclado. Va por dentro del control (Margin 0) para que no lo corte el
+# borde de un ScrollViewer.
+$script:EstiloFoco = [Windows.Markup.XamlReader]::Parse(@'
+<Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+  <Setter Property="Control.Template">
+    <Setter.Value>
+      <ControlTemplate>
+        <Rectangle Stroke="#FFF0F2F5" StrokeThickness="2" SnapsToDevicePixels="True"/>
+      </ControlTemplate>
+    </Setter.Value>
+  </Setter>
+</Style>
+'@)
+function Add-EstiloFoco {
+    param([Parameter(Mandatory)][Windows.Window]$Ventana)
+    $Ventana.Resources['Foco'] = $script:EstiloFoco
+}
+
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Vaporera Arcade" Height="800" Width="1120"
         MinHeight="480" MinWidth="820"
-        WindowStartupLocation="CenterScreen" Background="#FF15171B">
+        WindowStartupLocation="CenterScreen" Background="#FF15171B"
+        FocusManager.FocusedElement="{Binding ElementName=LstJuegos}">
+  <!-- El recuadro del foco de teclado (Foco) lo anade Add-EstiloFoco despues de cargar: el de
+       serie es una linea de puntos negra que con este fondo no se ve. -->
   <Window.Resources>
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="#FFE6E8EC"/>
@@ -570,6 +594,10 @@ if (Test-Path -LiteralPath $icoApp) {
       <Setter Property="Foreground" Value="#FFB9BEC7"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="Margin" Value="0,4,14,4"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
+    </Style>
+    <Style TargetType="ListBoxItem">
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
     </Style>
     <!-- El ComboBox necesita plantilla propia: el tema de Windows pinta su cuadro de blanco
          pase lo que pase en Background, y el texto claro encima no se lee. -->
@@ -579,6 +607,7 @@ if (Test-Path -LiteralPath $icoApp) {
       <Setter Property="BorderBrush" Value="#FF3A3F49"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="Height" Value="30"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ComboBox">
@@ -619,6 +648,8 @@ if (Test-Path -LiteralPath $icoApp) {
       <Setter Property="Foreground" Value="#FFE6E8EC"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="Padding" Value="8,6"/>
+      <!-- con el teclado ya se ve cual es por IsHighlighted -->
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ComboBoxItem">
@@ -643,6 +674,51 @@ if (Test-Path -LiteralPath $icoApp) {
       <Setter Property="Padding" Value="14,7"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
+    </Style>
+    <!-- Los botones del modo sencillo: grandes y con plantilla propia, que el tema de Windows
+         pinta de blanco el boton desactivado -->
+    <Style x:Key="Grande" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="FontSize" Value="17"/>
+      <Setter Property="Padding" Value="22,10"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}"
+                    SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="BorderBrush" Value="#FF8A909B"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Bd" Property="Opacity" Value="0.35"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Los huecos de la vista previa: botones (para el teclado) que se ven como un recuadro -->
+    <Style x:Key="Hueco" TargetType="Button">
+      <Setter Property="Background" Value="#FF111316"/>
+      <Setter Property="BorderBrush" Value="#FF3A3F49"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="HorizontalAlignment" Value="Left"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+              <ContentPresenter/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
   </Window.Resources>
 
@@ -667,12 +743,21 @@ if (Test-Path -LiteralPath $icoApp) {
         </StackPanel>
         <TextBlock Name="TxtSteam" Text="" FontSize="11" Foreground="#FF8A909B" Margin="0,2,0,0"/>
       </StackPanel>
-      <Button Name="BtnAjustes" Content="Ajustes..." HorizontalAlignment="Right" VerticalAlignment="Center"
-              Padding="10,3" Margin="0"/>
+      <!-- La propia Vaporera en Steam, para abrirla desde Big Picture con el mando: el boton
+           solo sale si no esta (o esta con otra ruta), segun Update-Botones -->
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+        <Button Name="BtnVaporeraSteam" Content="Añadir Vaporera a Steam" Padding="10,3" Visibility="Collapsed"
+                ToolTip="Añade esta aplicación a la biblioteca de Steam, con sus carátulas, para abrirla desde Big Picture"/>
+        <Button Name="BtnBigPicture" Content="Big Picture" Padding="10,3"
+                ToolTip="Abre Steam en Big Picture y cierra la Vaporera"/>
+        <Button Name="BtnAjustes" Content="Ajustes..." Padding="10,3"/>
+        <!-- cambia entre el modo avanzado (todo) y el sencillo (PanelSencillo): Set-ModoSencillo -->
+        <Button Name="BtnModo" Content="Modo sencillo" Padding="10,3" Margin="0"/>
+      </StackPanel>
     </Grid>
 
     <!-- lista -->
-    <Grid Grid.Row="1" Grid.Column="0" Margin="0,0,14,0">
+    <Grid Name="PanelLista" Grid.Row="1" Grid.Column="0" Margin="0,0,14,0">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
@@ -693,12 +778,15 @@ if (Test-Path -LiteralPath $icoApp) {
       <ListBox Name="LstJuegos" Grid.Row="3" Background="#FF1E2127" BorderBrush="#FF3A3F49"
                Foreground="#FFE6E8EC" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
         <!-- La casilla escribe en la propiedad Marcado del juego (binding de ida y vuelta con un
-             pscustomobject: funciona). Marcar no selecciona: la vista previa es del seleccionado. -->
+             pscustomobject: funciona). Marcar no selecciona: la vista previa es del seleccionado.
+             Sin foco propio: con el teclado se marca con Espacio sobre el juego (PreviewKeyDown),
+             y el tabulador no se para en cada casilla. -->
         <ListBox.ItemTemplate>
           <DataTemplate>
             <DockPanel Margin="2,4">
               <CheckBox DockPanel.Dock="Left" IsChecked="{Binding Marcado, Mode=TwoWay}" VerticalAlignment="Center"
-                        Margin="0,0,8,0" ToolTip="Marcar para añadir o quitar varios juegos de una vez"/>
+                        Margin="0,0,8,0" Focusable="False"
+                        ToolTip="Marcar para añadir o quitar varios juegos de una vez (Espacio)"/>
               <StackPanel>
                 <TextBlock Text="{Binding Nombre}" FontSize="14"/>
                 <TextBlock FontSize="11" Foreground="#FF8A909B">
@@ -721,14 +809,15 @@ if (Test-Path -LiteralPath $icoApp) {
     </Grid>
 
     <!-- detalle -->
-    <ScrollViewer Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto">
+    <!-- sin foco: seria una parada invisible del tabulador; con el foco dentro se desplaza igual -->
+    <ScrollViewer Name="PanelDetalle" Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto" Focusable="False">
     <StackPanel>
       <TextBlock Text="Nombre en la biblioteca" FontSize="11" Foreground="#FF8A909B"/>
       <TextBox Name="TxtNombre" Height="30" FontSize="15" Padding="6,4" Margin="0,3,0,10"
                Background="#FF1E2127" Foreground="#FFE6E8EC" BorderBrush="#FF3A3F49"
                VerticalContentAlignment="Center"/>
       <TextBlock Text="Ejecutable" FontSize="11" Foreground="#FF8A909B"/>
-      <TextBox Name="TxtExe" Height="28" Margin="0,3,0,10" IsReadOnly="True"
+      <TextBox Name="TxtExe" Height="28" Margin="0,3,0,10" IsReadOnly="True" IsTabStop="False"
                Background="#FF1A1D22" Foreground="#FFB9BEC7" BorderBrush="#FF2A2E36"/>
       <TextBlock Text="Opciones de lanzamiento" FontSize="11" Foreground="#FF8A909B"/>
       <TextBox Name="TxtOpciones" Height="28" Margin="0,3,0,10"
@@ -765,31 +854,30 @@ if (Test-Path -LiteralPath $icoApp) {
 
       <TextBlock Name="TxtOrigenArte" FontSize="11" Foreground="#FF8A909B" Margin="0,0,0,6" TextWrapping="Wrap"/>
       <!-- Con las caratulas preparadas, cada imagen (menos el icono, que sale de ellas) se pulsa
-           para elegir otra en la galeria. El Tag es el hueco: p, cap, hero o logo. -->
+           (o se elige con el teclado) para cambiarla en la galeria. El Tag es el hueco: p, cap,
+           hero o logo. Sin nada preparado estan desactivados (Update-Botones). -->
       <WrapPanel>
         <StackPanel Margin="0,0,14,10">
           <TextBlock Text="Portada 600x900" FontSize="10" Foreground="#FF6E747E"/>
-          <Border Name="BrdPortada" Tag="p" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0" Background="#FF111316">
+          <Button Name="BtnPortada" Tag="p" AutomationProperties.Name="Portada" Style="{StaticResource Hueco}" Margin="0,3,0,0" IsEnabled="False">
             <Image Name="ImgPortada" Width="140" Height="210" Stretch="UniformToFill"/>
-          </Border>
+          </Button>
         </StackPanel>
         <StackPanel Margin="0,0,14,10">
           <TextBlock Text="Cápsula 460x215" FontSize="10" Foreground="#FF6E747E"/>
-          <Border Name="BrdCapsula" Tag="cap" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,10" Background="#FF111316"
-                  HorizontalAlignment="Left">
+          <Button Name="BtnCapsula" Tag="cap" AutomationProperties.Name="Cápsula" Style="{StaticResource Hueco}" Margin="0,3,0,10" IsEnabled="False">
             <Image Name="ImgCapsula" Width="195" Height="91" Stretch="UniformToFill"/>
-          </Border>
+          </Button>
           <TextBlock Text="Hero 1920x620" FontSize="10" Foreground="#FF6E747E"/>
-          <Border Name="BrdHero" Tag="hero" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0" Background="#FF111316">
+          <Button Name="BtnHero" Tag="hero" AutomationProperties.Name="Hero" Style="{StaticResource Hueco}" Margin="0,3,0,0" IsEnabled="False">
             <Image Name="ImgHero" Width="280" Height="90" Stretch="UniformToFill"/>
-          </Border>
+          </Button>
         </StackPanel>
         <StackPanel Margin="0,0,0,10">
           <TextBlock Text="Logo" FontSize="10" Foreground="#FF6E747E"/>
-          <Border Name="BrdLogo" Tag="logo" BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,10" Background="#FF111316"
-                  HorizontalAlignment="Left">
+          <Button Name="BtnLogo" Tag="logo" AutomationProperties.Name="Logo" Style="{StaticResource Hueco}" Margin="0,3,0,10" IsEnabled="False">
             <Image Name="ImgLogo" Width="150" Height="70" Margin="6" Stretch="Uniform"/>
-          </Border>
+          </Button>
           <TextBlock Text="Icono" FontSize="10" Foreground="#FF6E747E"/>
           <Border BorderBrush="#FF3A3F49" BorderThickness="1" Margin="0,3,0,0" Background="#FF111316"
                   HorizontalAlignment="Left">
@@ -801,7 +889,7 @@ if (Test-Path -LiteralPath $icoApp) {
     </ScrollViewer>
 
     <!-- registro -->
-    <Grid Grid.Row="2" Grid.ColumnSpan="2" Margin="0,12,0,0">
+    <Grid Name="PanelRegistro" Grid.Row="2" Grid.ColumnSpan="2" Margin="0,12,0,0">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="*"/>
@@ -814,12 +902,63 @@ if (Test-Path -LiteralPath $icoApp) {
                FontSize="11" Background="#FF111316" Foreground="#FF9CD1A0" BorderBrush="#FF2A2E36"
                VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap"/>
     </Grid>
+
+    <!-- Modo sencillo: en lugar de la lista, el detalle y el registro (que se ocultan), solo los
+         juegos de las tiendas, en grande, y anadir o quitar los marcados. Lo demas (origen de las
+         caratulas, Big Picture, reemplazar) sale de lo puesto en el modo avanzado. Los mismos
+         objetos que LstJuegos: las marcas son las mismas en los dos modos. -->
+    <Grid Name="PanelSencillo" Grid.Row="1" Grid.RowSpan="2" Grid.ColumnSpan="2" Visibility="Collapsed">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+      <TextBlock Grid.Row="0" FontSize="14" Foreground="#FFB9BEC7" TextWrapping="Wrap" Margin="0,0,0,8"
+                 Text="Marca los juegos (A o X con el mando, Espacio o Enter con el teclado) y pulsa «Añadir marcados». Para todo lo demás, el modo avanzado."/>
+      <ListBox Name="LstSencillo" Grid.Row="1" Background="#FF1E2127" BorderBrush="#FF3A3F49"
+               Foreground="#FFE6E8EC" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <DockPanel Margin="6,8">
+              <CheckBox DockPanel.Dock="Left" IsChecked="{Binding Marcado, Mode=TwoWay}" VerticalAlignment="Center"
+                        Margin="0,0,16,0" Focusable="False">
+                <CheckBox.LayoutTransform>
+                  <ScaleTransform ScaleX="1.6" ScaleY="1.6"/>
+                </CheckBox.LayoutTransform>
+              </CheckBox>
+              <StackPanel>
+                <TextBlock Text="{Binding Nombre}" FontSize="20"/>
+                <TextBlock FontSize="13" Foreground="#FF8A909B">
+                  <Run Text="{Binding Fuente, Mode=OneWay}"/><Run Text="   "/><Run Text="{Binding Marca, Mode=OneWay}"/>
+                </TextBlock>
+              </StackPanel>
+            </DockPanel>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+      <StackPanel Grid.Row="2" Margin="0,12,0,0">
+        <ProgressBar Name="PrgSencillo" Height="3" Margin="0,0,0,9" IsIndeterminate="True"
+                     Visibility="Collapsed" Background="#FF1E2127" Foreground="#FFDC1E23" BorderThickness="0"/>
+        <WrapPanel>
+          <!-- mientras se preparan las caratulas es el de cancelar (Get-BotonTarea) -->
+          <Button Name="BtnAnadirSencillo" Content="Añadir marcados" Style="{StaticResource Grande}" IsEnabled="False"
+                  Background="#FF7A1418"/>
+          <Button Name="BtnQuitarSencillo" Content="Quitar marcados" Style="{StaticResource Grande}" IsEnabled="False"/>
+        </WrapPanel>
+        <!-- la ultima linea del registro, y debajo el aviso si algo ha ido mal (Set-AvisoSencillo) -->
+        <TextBlock Name="TxtEstadoSencillo" FontSize="13" Foreground="#FF9CD1A0" TextTrimming="CharacterEllipsis"
+                   Margin="0,10,0,0" MinHeight="17"/>
+        <TextBlock Name="TxtAvisoSencillo" FontSize="13" Foreground="#FFE0B060" TextWrapping="Wrap"
+                   Margin="0,4,0,0"/>
+      </StackPanel>
+    </Grid>
   </Grid>
 </Window>
 '@
 
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $win = [Windows.Markup.XamlReader]::Load($reader)
+Add-EstiloFoco $win
 # Con 668 de alto la vista previa se cortaba (el hero y el icono, bajo la barra). Mas alta,
 # pero sin salirse de la pantalla: un portatil de 1080p al 125 % deja ~820 utiles
 $areaUtil = [System.Windows.SystemParameters]::WorkArea
@@ -827,11 +966,13 @@ if ($win.Height -gt $areaUtil.Height) { $win.Height = $areaUtil.Height }
 if ($win.Width -gt $areaUtil.Width) { $win.Width = $areaUtil.Width }
 
 $ctl = @{}
-foreach ($n in @('TxtVersion','TxtSteam','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
+foreach ($n in @('TxtVersion','TxtSteam','BtnVaporeraSteam','BtnBigPicture','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar','LstJuegos',
                  'TxtNombre','TxtExe','TxtOpciones','TxtDetalle','TxtElegido','BtnOlvidar','CmbOrigenArte',
                  'BtnPreparar','BtnAnadir','BtnQuitar','PrgPreparar','TxtOrigenArte',
-                 'ImgPortada','ImgCapsula','ImgHero','ImgLogo','ImgIcono','BrdPortada','BrdCapsula','BrdHero','BrdLogo',
-                 'ChkBigPicture','ChkReemplazar','TxtLog','TxtMarcados','BtnAnadirMarcados','BtnQuitarMarcados','BtnDesmarcar')) {
+                 'ImgPortada','ImgCapsula','ImgHero','ImgLogo','ImgIcono','BtnPortada','BtnCapsula','BtnHero','BtnLogo',
+                 'ChkBigPicture','ChkReemplazar','TxtLog','TxtMarcados','BtnAnadirMarcados','BtnQuitarMarcados','BtnDesmarcar',
+                 'BtnModo','PanelLista','PanelDetalle','PanelRegistro','PanelSencillo','LstSencillo','BtnAnadirSencillo',
+                 'BtnQuitarSencillo','PrgSencillo','TxtEstadoSencillo','TxtAvisoSencillo')) {
     $ctl[$n] = $win.FindName($n)
 }
 
@@ -843,6 +984,7 @@ $script:Preparado = $null
 $script:CambiandoJuego = $false   # true mientras la seleccion rellena los cuadros de texto
 $script:Ocupado = $false          # true mientras hay una operacion larga en marcha
 $script:OcupadoBoton = $null      # el boton que ha cambiado de texto y el que tenia antes
+$script:FocoAntes = $null         # el control con el foco al empezar la operacion larga (Restore-Foco)
 $script:Tarea = $null             # la preparacion en segundo plano que tiene la ventana ocupada
 # Todas las de segundo plano sin recoger: la de arriba y las canceladas que aun no han acabado
 $script:Tareas = New-Object System.Collections.ArrayList
@@ -850,6 +992,14 @@ $script:DentroDeTareas = $false   # Update-Tareas en marcha: que no se meta otro
 $script:Galeria = $null           # la ventana de elegir imagen, mientras esta abierta
 $script:Visibles = New-Object System.Collections.ArrayList   # los de la lista con el filtro de ahora
 $script:Lote = $null              # los juegos de "Anadir marcados" mientras se preparan
+# La propia Vaporera en shortcuts.vdf (Get-EstadoVaporera): 'esta', 'falta', 'cambiada' (con
+# otra ruta) o '' sin Steam. La pone Update-Todos y la mira Update-Botones.
+$script:VaporeraEnSteam = ''
+# El modo sencillo (Set-ModoSencillo): se guarda en config.json y se arranca en el ultimo usado
+$script:Sencillo = $false
+# Por que se cierra la ventana al acabar la operacion ('' si no se cierra): lo pide la operacion
+# (Complete-CambioSteam) y lo hace Exit-Ocupado (ocupada, Add_Closing no la deja cerrarse)
+$script:CerrarAlAcabar = ''
 # Los juegos elegidos a mano en la galeria, lo guardado en config.json: se lee aqui y solo
 # cambia al guardar uno (Save-Elegido) o al olvidarlo (Invoke-Olvidar). Si no se puede leer,
 # se arranca igual, sin ninguno.
@@ -864,6 +1014,8 @@ function Write-LogVentana {
     Write-Registro $Texto
     $ctl.TxtLog.AppendText($Texto + "`r`n")
     $ctl.TxtLog.ScrollToEnd()
+    # el modo sencillo no tiene registro: ensena la ultima linea
+    if ($Texto.Trim()) { $ctl.TxtEstadoSencillo.Text = $Texto.Trim() }
 }
 
 function Add-Log {
@@ -882,19 +1034,34 @@ function Update-Interfaz {
 
 # Lo que se desactiva mientras dura una operacion larga. El cuadro del registro NO esta en la
 # lista: es lo unico que el usuario mira mientras espera, y desactivado se lee gris.
-$ControlesInteractivos = @('BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar',
+$ControlesInteractivos = @('BtnVaporeraSteam','BtnBigPicture','BtnAjustes','TxtBuscar','ChkRecientes','ChkApps','BtnRefrescar','BtnExaminar',
                            'LstJuegos','TxtNombre','TxtOpciones','BtnOlvidar','CmbOrigenArte','BtnPreparar','BtnAnadir',
                            'BtnQuitar','ChkBigPicture','ChkReemplazar','BtnAnadirMarcados','BtnQuitarMarcados',
-                           'BtnDesmarcar')
+                           'BtnDesmarcar','BtnPortada','BtnCapsula','BtnHero','BtnLogo',
+                           'BtnModo','LstSencillo','BtnAnadirSencillo','BtnQuitarSencillo')
+
+# El boton que hace de "Cancelar" mientras hay una tarea en segundo plano: el de preparar o, en
+# el modo sencillo (donde no se ve), el de anadir. El modo no cambia con la ventana ocupada.
+function Get-BotonTarea {
+    if ($script:Sencillo) { return 'BtnAnadirSencillo' }
+    return 'BtnPreparar'
+}
 
 # Un solo sitio decide que botones estan vivos. Antes lo hacia cada evento por su cuenta y no
 # se puede combinar con Invoke-Ocupado, que al terminar reactiva todo a la vez.
 function Update-Botones {
     # En plena operacion todo esta desactivado; Exit-Ocupado lo vuelve a llamar al terminar.
     # La excepcion: mientras se preparan las caratulas en segundo plano, el boton de preparar
-    # es el de cancelar.
+    # (o el de anadir, en el modo sencillo) es el de cancelar.
     if ($script:Ocupado) {
-        $ctl.BtnPreparar.IsEnabled = ($null -ne $script:Tarea)
+        $cancelar = $ctl[(Get-BotonTarea)]
+        $cancelar.IsEnabled = ($null -ne $script:Tarea)
+        # Al apagarse todo, el foco se ha perdido (el de preparar se apaga y se vuelve a
+        # encender). Va al de cancelar, lo unico que se puede pulsar: sin foco, el teclado no
+        # llegaria a el.
+        if ($script:Tarea -and $win.IsActive -and -not (Test-ControlUsable ([Windows.Input.Keyboard]::FocusedElement))) {
+            [void]$cancelar.Focus()
+        }
         return
     }
     $ctl.BtnPreparar.IsEnabled = [bool]$script:Steam
@@ -902,6 +1069,20 @@ function Update-Botones {
     # solo tiene sentido con un juego que ya tenga acceso directo (la marca 'YA EN STEAM')
     $sel = $ctl.LstJuegos.SelectedItem
     $ctl.BtnQuitar.IsEnabled   = ([bool]$script:Steam -and $null -ne $sel -and [bool]$sel.YaEnSteam)
+    # los huecos de la vista previa abren la galeria, que necesita algo preparado
+    foreach ($h in $HuecosVista.Values) { $ctl[$h.Boton].IsEnabled = ($null -ne $script:Preparado) }
+    $ctl.BtnBigPicture.IsEnabled = [bool]$script:Steam
+    # la propia Vaporera: el boton solo sale si falta en Steam o esta con otra ruta
+    $ctl.BtnVaporeraSteam.IsEnabled = [bool]$script:Steam
+    if ($script:VaporeraEnSteam -eq 'falta') {
+        $ctl.BtnVaporeraSteam.Content = 'Añadir Vaporera a Steam'
+        $ctl.BtnVaporeraSteam.Visibility = 'Visible'
+    } elseif ($script:VaporeraEnSteam -eq 'cambiada') {
+        $ctl.BtnVaporeraSteam.Content = 'Actualizar Vaporera en Steam'
+        $ctl.BtnVaporeraSteam.Visibility = 'Visible'
+    } else {
+        $ctl.BtnVaporeraSteam.Visibility = 'Collapsed'
+    }
 
     # los marcados: la cuenta va en el boton y en la linea de encima
     $marc = @(Get-Marcados)
@@ -911,6 +1092,11 @@ function Update-Botones {
     $ctl.BtnAnadirMarcados.IsEnabled = ([bool]$script:Steam -and $marc.Count -gt 0)
     $ctl.BtnQuitarMarcados.IsEnabled = ([bool]$script:Steam -and $enSteam -gt 0)
     $ctl.BtnDesmarcar.IsEnabled      = ($marc.Count -gt 0)
+    # los del modo sencillo (Get-Marcados ya cuenta solo los juegos de las tiendas)
+    $ctl.BtnAnadirSencillo.Content = $(if ($marc.Count) { "Añadir marcados ($($marc.Count))" } else { 'Añadir marcados' })
+    $ctl.BtnQuitarSencillo.Content = $(if ($enSteam) { "Quitar marcados ($enSteam)" } else { 'Quitar marcados' })
+    $ctl.BtnAnadirSencillo.IsEnabled = $ctl.BtnAnadirMarcados.IsEnabled
+    $ctl.BtnQuitarSencillo.IsEnabled = $ctl.BtnQuitarMarcados.IsEnabled
     if (-not $marc.Count) {
         $ctl.TxtMarcados.Text = 'Marca las casillas para añadir o quitar varios juegos cerrando Steam una sola vez.'
     } else {
@@ -923,13 +1109,31 @@ function Update-Botones {
     Update-Elegido
 }
 
-function Get-Marcados { return @($script:Todos | Where-Object { $_ -and $_.Marcado }) }
+# Los marcados con los que se trabaja. En el modo sencillo, solo los juegos de las tiendas: un
+# programa reciente marcado en el avanzado no se ve alli y no se tiene que anadir sin saberlo
+# (sigue marcado para cuando se vuelva al avanzado).
+function Get-Marcados {
+    return @($script:Todos | Where-Object { $_ -and $_.Marcado -and (-not $script:Sencillo -or (Test-EsJuego $_)) })
+}
 
-# El binding de un pscustomobject no avisa de los cambios hechos por codigo: Items.Refresh
-# vuelve a pintar las casillas sin perder la seleccion
+# Lo que sale en el modo sencillo: los juegos de las tiendas. Ni las apps de la Store, ni los
+# programas recientes, ni los elegidos con "Examinar .exe...": para eso esta el avanzado.
+$FuentesJuego = @('Xbox / Game Pass', 'Epic Games', 'GOG', 'Ubisoft Connect')
+function Test-EsJuego {
+    param($Juego)
+    return ($FuentesJuego -contains [string]$Juego.Fuente)
+}
+
+# El binding de un pscustomobject no avisa de los cambios hechos por codigo (ni de los hechos en
+# la otra lista): Items.Refresh vuelve a pintar las casillas sin perder la seleccion
+function Update-Casillas {
+    $ctl.LstJuegos.Items.Refresh()
+    $ctl.LstSencillo.Items.Refresh()
+}
+
 function Clear-Marcados {
     foreach ($j in @($script:Todos)) { if ($j -and $j.Marcado) { $j.Marcado = $false } }
-    $ctl.LstJuegos.Items.Refresh()
+    Update-Casillas
     Update-Botones
 }
 
@@ -941,12 +1145,15 @@ function Enter-Ocupado {
     param([string]$Boton = '', [string]$TextoOcupado = '')
     if ($script:Ocupado) { return $false }
     $script:Ocupado = $true
+    $script:FocoAntes = [Windows.Input.FocusManager]::GetFocusedElement($win)
     $script:OcupadoBoton = $null
     if ($Boton -and $TextoOcupado) {
         $script:OcupadoBoton = @{ Nombre = $Boton; Texto = $ctl[$Boton].Content }
         $ctl[$Boton].Content = $TextoOcupado
     }
     foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $false }
+    # el aviso de lo que fallo la vez anterior ya no viene a cuento
+    Set-AvisoSencillo ''
     Update-Botones
     return $true
 }
@@ -960,6 +1167,112 @@ function Exit-Ocupado {
     }
     foreach ($n in $ControlesInteractivos) { $ctl[$n].IsEnabled = $true }
     Update-Botones
+    Restore-Foco
+    # Despues de soltar la ventana, y en diferido: el Close tiene que llegar cuando ya no hay
+    # nada en marcha, o Add_Closing lo cancela
+    if ($script:CerrarAlAcabar) {
+        [void]$win.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Background, [action]{
+            $motivo = $script:CerrarAlAcabar
+            $script:CerrarAlAcabar = ''
+            if ($script:Ocupado -or -not $motivo) { return }
+            Write-Registro $motivo
+            $win.Close()
+        })
+    }
+}
+
+# --- el modo sencillo --------------------------------------------------
+# Sin registro a la vista, lo que ha ido mal se dice aqui (y el detalle, en el registro del
+# modo avanzado). Se borra al empezar la siguiente operacion (Enter-Ocupado).
+function Set-AvisoSencillo {
+    param([string]$Texto)
+    $ctl.TxtAvisoSencillo.Text = $Texto
+}
+
+# Que se hace al acabar de anadir o quitar. Si ha ido bien, la Vaporera se cierra:
+#  - siempre que Steam se haya vuelto a abrir en Big Picture (en los dos modos): la taparia y
+#    con el mando no se podria volver a ella. $BigPicture lo dice quien llama: al anadir Steam
+#    se reabre siempre; al quitar, solo si estaba abierto.
+#  - en el modo sencillo, ademas, tras anadir ($Anadir), aunque no sea en Big Picture.
+# Si no ha ido bien se queda abierta para leer que ha pasado: en el sencillo, con $Aviso debajo
+# de los botones (en el avanzado ya esta el registro).
+function Complete-CambioSteam {
+    param([bool]$Bien, [bool]$BigPicture = $false, [switch]$Anadir, [string]$Aviso = '')
+    if ($Bien) {
+        if ($BigPicture) { $script:CerrarAlAcabar = 'Steam se ha vuelto a abrir en Big Picture: cierro la Vaporera.' }
+        elseif ($script:Sencillo -and $Anadir) { $script:CerrarAlAcabar = 'Modo sencillo: añadido sin problemas, cierro la Vaporera.' }
+        return
+    }
+    if ($script:Sencillo -and $Aviso) { Set-AvisoSencillo "$Aviso El detalle está en el registro del modo avanzado." }
+}
+
+# Cambia de modo. El sencillo oculta la lista, el detalle y el registro (siguen ahi, con lo
+# puesto, que es lo que usa al anadir) y ensena PanelSencillo. $Guardar lo apunta en config.json
+# para arrancar asi la proxima vez.
+function Set-ModoSencillo {
+    param([bool]$Sencillo, [switch]$Guardar)
+    $script:Sencillo = $Sencillo
+    $avanzado = $(if ($Sencillo) { 'Collapsed' } else { 'Visible' })
+    foreach ($n in @('PanelLista', 'PanelDetalle', 'PanelRegistro', 'BtnAjustes')) { $ctl[$n].Visibility = $avanzado }
+    $ctl.PanelSencillo.Visibility = $(if ($Sencillo) { 'Visible' } else { 'Collapsed' })
+    if ($Sencillo) {
+        $ctl.BtnModo.Content = 'Modo avanzado'
+        $ctl.BtnModo.ToolTip = 'Vuelve a la ventana completa: elegir carátulas, cambiar el nombre, otros programas...'
+    } else {
+        $ctl.BtnModo.Content = 'Modo sencillo'
+        $ctl.BtnModo.ToolTip = 'Solo los juegos, en grande, para marcarlos y añadirlos o quitarlos (pensado para el mando)'
+    }
+    Set-AvisoSencillo ''
+    # las marcas hechas en la otra lista
+    Update-Casillas
+    Update-Botones
+    if ($Guardar) {
+        try { Set-ConfigValor -Nombre 'ModoSencillo' -Valor $Sencillo }
+        catch { Write-RegistroError -Contexto 'guardar el modo' -Fallo $_ }
+    }
+    # el foco estaba en lo que se acaba de ocultar (o en el boton del modo): a la lista
+    $win.UpdateLayout()
+    $destino = Get-FocoLista
+    [Windows.Input.FocusManager]::SetFocusedElement($win, $destino)
+    if ($win.IsActive) { [void]$destino.Focus() }
+}
+
+# Desactivar el control que tiene el foco se lo quita, y al reactivarlo nadie se lo devuelve:
+# sin esto, tras cada operacion larga el teclado empezaria otra vez por arriba. Vuelve al que
+# lo tenia antes o, si ya no se puede (el boton de anadir se apaga al terminar), a la lista.
+# Si mientras tanto el usuario lo ha puesto en el registro (sigue activo), se queda alli.
+# Con la ventana detras (Steam en Big Picture) se deja apuntado para cuando vuelva delante.
+function Restore-Foco {
+    $antes = $script:FocoAntes
+    $script:FocoAntes = $null
+    $ahora = [Windows.Input.FocusManager]::GetFocusedElement($win)
+    # en el de preparar (o el de anadir, en sencillo) lo ha dejado Update-Botones, para
+    # cancelar: eso no cuenta
+    if ((Test-ControlUsable $ahora) -and $ahora -ne $antes -and $ahora -ne $ctl[(Get-BotonTarea)]) { return }
+    $destino = $antes
+    if (-not (Test-ControlUsable $destino)) { $destino = Get-FocoLista }
+    [Windows.Input.FocusManager]::SetFocusedElement($win, $destino)
+    if ($win.IsActive) { [void]$destino.Focus() }
+}
+
+# Donde va el foco cuando no hay otro sitio: el juego seleccionado o, sin el, la lista (la del
+# modo en el que se este)
+function Get-FocoLista {
+    $lista = $(if ($script:Sencillo) { $ctl.LstSencillo } else { $ctl.LstJuegos })
+    $sel = $lista.SelectedItem
+    if ($null -ne $sel) {
+        $c = $lista.ItemContainerGenerator.ContainerFromItem($sel)
+        if (Test-ControlUsable $c) { return $c }
+    }
+    return $lista
+}
+
+# Un control de la ventana principal que puede recibir el foco ahora mismo
+function Test-ControlUsable {
+    param($Control)
+    if ($Control -isnot [Windows.UIElement] -or $Control -eq $win) { return $false }
+    if (-not ($Control.IsEnabled -and $Control.IsVisible -and $Control.Focusable)) { return $false }
+    return ([Windows.Window]::GetWindow($Control) -eq $win)
 }
 
 # Envoltorio de toda operacion larga lanzada desde un evento. Add-Log llama a Update-Interfaz,
@@ -993,6 +1306,8 @@ function Update-Lista {
     $vista = $script:Todos
     if ($filtro) { $vista = $vista | Where-Object { (Test-Contiene $_.Nombre $filtro) -or (Test-Contiene $_.Exe $filtro) } }
     $ctl.LstJuegos.ItemsSource = @($vista)
+    # la del modo sencillo no tiene busqueda: todos los juegos de las tiendas
+    $ctl.LstSencillo.ItemsSource = @($script:Todos | Where-Object { $_ -and (Test-EsJuego $_) })
     # para avisar de los marcados que el filtro esconde
     $script:Visibles = New-Object System.Collections.ArrayList
     foreach ($j in @($vista)) { if ($j) { [void]$script:Visibles.Add($j) } }
@@ -1004,6 +1319,8 @@ function Update-Lista {
 function Update-Todos {
     $existentes = @()
     if ($script:Steam) { $existentes = @(Get-ShortcutsExistentes -Ruta $script:Steam.Shortcuts) }
+    $script:VaporeraEnSteam = ''
+    if ($script:Steam) { $script:VaporeraEnSteam = Get-EstadoVaporera $existentes }
     foreach ($j in (@($script:Manuales) + @($script:Detectados))) {
         $dup = Find-ShortcutDuplicado -Existentes $existentes -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions $j.LaunchOptions
         $j.YaEnSteam = ($null -ne $dup)
@@ -1024,8 +1341,10 @@ function Update-Deteccion {
   try {
     # la busqueda crea los objetos de nuevo: las casillas marcadas se recuperan por exe y opciones
     $marcados = @{}
-    foreach ($j in @(Get-Marcados)) { $marcados["$($j.Exe)|$($j.LaunchOptions)"] = $true }
+    # todos, tambien los que el modo sencillo no ensena (Get-Marcados se los saltaria)
+    foreach ($j in @($script:Todos | Where-Object { $_ -and $_.Marcado })) { $marcados["$($j.Exe)|$($j.LaunchOptions)"] = $true }
     $ctl.LstJuegos.ItemsSource = $null
+    $ctl.LstSencillo.ItemsSource = $null
     Add-Log 'Buscando juegos instalados...'
     $script:Detectados = @(Get-TodosLosJuegos -IncluirRecientes:([bool]$ctl.ChkRecientes.IsChecked) `
                                               -IncluirApps:([bool]$ctl.ChkApps.IsChecked) -Log $LogGui)
@@ -1045,12 +1364,12 @@ function Update-Deteccion {
   }
 }
 
-# Los huecos de la vista previa: su imagen, su recuadro (el que se pulsa) y como se llaman
+# Los huecos de la vista previa: su imagen, su boton (el recuadro que se pulsa) y como se llaman
 $HuecosVista = [ordered]@{
-    p    = @{ Img = 'ImgPortada'; Borde = 'BrdPortada'; Nombre = 'portada' }
-    cap  = @{ Img = 'ImgCapsula'; Borde = 'BrdCapsula'; Nombre = 'cápsula' }
-    hero = @{ Img = 'ImgHero';    Borde = 'BrdHero';    Nombre = 'hero' }
-    logo = @{ Img = 'ImgLogo';    Borde = 'BrdLogo';    Nombre = 'logo' }
+    p    = @{ Img = 'ImgPortada'; Boton = 'BtnPortada'; Nombre = 'portada' }
+    cap  = @{ Img = 'ImgCapsula'; Boton = 'BtnCapsula'; Nombre = 'cápsula' }
+    hero = @{ Img = 'ImgHero';    Boton = 'BtnHero';    Nombre = 'hero' }
+    logo = @{ Img = 'ImgLogo';    Boton = 'BtnLogo';    Nombre = 'logo' }
 }
 
 # Pinta la vista previa con lo que haya en $script:Preparado (o la vacia si no hay nada).
@@ -1063,11 +1382,11 @@ function Update-VistaPrevia {
         if ($p) { $ruta = $p.Rutas[$k] }
         $ctl[$h.Img].Source = Get-ImagenSegura $ruta
         if ($p) {
-            $ctl[$h.Borde].Cursor = [Windows.Input.Cursors]::Hand
-            $ctl[$h.Borde].ToolTip = "Pulsa para elegir otra imagen de $($h.Nombre)"
+            $ctl[$h.Boton].Cursor = [Windows.Input.Cursors]::Hand
+            $ctl[$h.Boton].ToolTip = "Pulsa para elegir otra imagen de $($h.Nombre)"
         } else {
-            $ctl[$h.Borde].Cursor = $null
-            $ctl[$h.Borde].ToolTip = $null
+            $ctl[$h.Boton].Cursor = $null
+            $ctl[$h.Boton].ToolTip = $null
         }
     }
     $icono = $null
@@ -1205,7 +1524,8 @@ function Show-Ajustes {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Ajustes" Width="520" SizeToContent="Height" ResizeMode="NoResize"
-        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="#FF15171B">
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="#FF15171B"
+        FocusManager.FocusedElement="{Binding ElementName=TxtClave}">
   <Window.Resources>
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="#FFE6E8EC"/>
@@ -1218,6 +1538,7 @@ function Show-Ajustes {
       <Setter Property="Padding" Value="14,7"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="Margin" Value="8,0,0,0"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
     </Style>
   </Window.Resources>
   <StackPanel Margin="16">
@@ -1242,6 +1563,7 @@ function Show-Ajustes {
 </Window>
 '@
     $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xamlAjustes))
+    Add-EstiloFoco $dlg
     $dlg.Owner = $win
     if ($script:IconoVentana) { $dlg.Icon = $script:IconoVentana }
     $txtClave  = $dlg.FindName('TxtClave')
@@ -1335,6 +1657,14 @@ $ctl.CmbOrigenArte.Add_SelectionChanged({ Update-Elegido })
 $script:Reloj = New-Object Windows.Threading.DispatcherTimer
 $script:Reloj.Interval = [TimeSpan]::FromMilliseconds(100)
 $script:Reloj.Add_Tick({ Update-Tareas })
+
+# La barra de "trabajando" de la tarea en segundo plano: una en cada modo
+function Set-Progreso {
+    param([bool]$Visible)
+    $v = $(if ($Visible) { 'Visible' } else { 'Collapsed' })
+    $ctl.PrgPreparar.Visibility = $v
+    $ctl.PrgSencillo.Visibility = $v
+}
 
 function Update-Tareas {
     # Lo que llama AlTerminar puede bombear mensajes (Add-Log) y con ello colar otro tic aqui
@@ -1437,7 +1767,7 @@ function Start-Preparar {
         [void]$script:Tareas.Add($script:Tarea)
         $script:Reloj.Start()
         $lanzada = $true
-        $ctl.PrgPreparar.Visibility = 'Visible'
+        Set-Progreso $true
         Update-Botones      # ahora que hay tarea, el boton de cancelar se enciende
     } catch {
         Add-Log "ERROR preparando carátulas: $($_.Exception.Message)"
@@ -1451,7 +1781,7 @@ function Start-Preparar {
 function Complete-Preparar {
     param([hashtable]$Tarea, $Salida)
     $script:Tarea = $null
-    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    Set-Progreso $false
     try {
         if ($Salida.Fallo) {
             Write-LogVentana "ERROR preparando carátulas: $($Salida.Fallo.Exception.Message)"
@@ -1494,7 +1824,7 @@ function Stop-TareaVentana {
     $script:Tarea = $null
     foreach ($l in @(Get-TareaLineas $t)) { Write-LogVentana $l }
     Stop-TareaFondo $t
-    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    Set-Progreso $false
     Write-LogVentana $t.Datos.TextoCancelado
     if ($t.Datos.AlCancelar) { & $t.Datos.AlCancelar $t }
     Exit-Ocupado
@@ -1704,6 +2034,10 @@ function Show-ElegirJuego {
       <Setter Property="BorderBrush" Value="#FF3A3F49"/>
       <Setter Property="Padding" Value="14,7"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
+    </Style>
+    <Style TargetType="ListBoxItem">
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
     </Style>
   </Window.Resources>
   <Grid Margin="16">
@@ -1751,6 +2085,7 @@ function Show-ElegirJuego {
 </Window>
 '@
     $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xamlElegir))
+    Add-EstiloFoco $dlg
     $dlg.Owner = $Duenio
     if ($script:IconoVentana) { $dlg.Icon = $script:IconoVentana }
     $dlg.Title = "Elegir el juego - $($Preparado.Nombre)"
@@ -1770,6 +2105,15 @@ function Show-ElegirJuego {
     }
     $script:ElegirJuego.Usar.Add_Click($usar)
     $script:ElegirJuego.Lista.Add_MouseDoubleClick($usar)
+    # Enter en la lista usa el juego que tiene el foco; sin esto lo cogeria "Buscar" (IsDefault)
+    $script:ElegirJuego.Lista.Add_PreviewKeyDown({
+        param($s, $e)
+        if ($e.Key -ne 'Return') { return }
+        $item = [Windows.Controls.ItemsControl]::ContainerFromElement($s, $e.OriginalSource)
+        if ($item) { $item.IsSelected = $true }
+        $e.Handled = $true
+        & $usar
+    })
     $dlg.Add_ContentRendered({
         $script:ElegirJuego.Busqueda.Focus() | Out-Null
         $script:ElegirJuego.Busqueda.SelectAll()
@@ -1808,10 +2152,12 @@ function Show-Galeria {
       <Setter Property="BorderBrush" Value="#FF3A3F49"/>
       <Setter Property="Padding" Value="14,7"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
     </Style>
     <!-- cada opcion: sin la plantilla del tema, que al pasar el raton pinta el fondo de azul claro -->
     <Style x:Key="Opcion" TargetType="Button">
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{DynamicResource Foco}"/>
       <Setter Property="Margin" Value="0,0,10,10"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -1842,7 +2188,7 @@ function Show-Galeria {
     <TextBlock Name="TxtEstado" Grid.Row="1" FontSize="11" Foreground="#FF8A909B" Margin="0,4,0,6" TextWrapping="Wrap"/>
     <ProgressBar Name="PrgGaleria" Grid.Row="2" Height="3" Margin="0,0,0,10" IsIndeterminate="True"
                  Background="#FF1E2127" Foreground="#FFDC1E23" BorderThickness="0"/>
-    <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <ScrollViewer Grid.Row="3" Focusable="False" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <WrapPanel Name="PnlOpciones"/>
     </ScrollViewer>
     <Grid Grid.Row="4" Margin="0,10,0,0">
@@ -1858,6 +2204,7 @@ function Show-Galeria {
 </Window>
 '@
     $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xamlGaleria))
+    Add-EstiloFoco $dlg
     $dlg.Owner = $win
     if ($script:IconoVentana) { $dlg.Icon = $script:IconoVentana }
     $nombreHueco = $HuecosVista[$Ranura].Nombre
@@ -1884,6 +2231,12 @@ function Show-Galeria {
             $script:Galeria.Juego = $c
             $script:Galeria.Ventana.Close()
         }
+    })
+    # el foco empieza en la imagen actual: con el teclado (o el mando) se llega a las demas con
+    # las flechas, y Escape cierra sin cambiar nada
+    $dlg.Add_ContentRendered({
+        $c = $script:Galeria.Panel.Children
+        if ($c.Count) { [void]$c[0].Focus() }
     })
     try {
         $actual = $p.Rutas[$Ranura]
@@ -1966,7 +2319,7 @@ function Start-AplicarAlternativa {
         [void]$script:Tareas.Add($script:Tarea)
         $script:Reloj.Start()
         $lanzada = $true
-        $ctl.PrgPreparar.Visibility = 'Visible'
+        Set-Progreso $true
         Update-Botones      # ahora que hay tarea, el boton de cancelar se enciende
     } catch {
         Add-Log "ERROR cambiando la imagen: $($_.Exception.Message)"
@@ -1979,7 +2332,7 @@ function Start-AplicarAlternativa {
 function Complete-AplicarAlternativa {
     param([hashtable]$Tarea, $Salida)
     $script:Tarea = $null
-    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    Set-Progreso $false
     try {
         if ($Salida.Fallo) {
             Write-LogVentana "No he podido usar esa imagen: $($Salida.Fallo.Exception.Message) Elige otra."
@@ -2005,7 +2358,7 @@ function Complete-AplicarAlternativa {
 }
 
 foreach ($k in $HuecosVista.Keys) {
-    $ctl[$HuecosVista[$k].Borde].Add_MouseLeftButtonUp({ param($s, $e) Show-Galeria -Ranura ([string]$s.Tag) })
+    $ctl[$HuecosVista[$k].Boton].Add_Click({ param($s, $e) Show-Galeria -Ranura ([string]$s.Tag) })
 }
 
 function Invoke-Anadir {
@@ -2019,6 +2372,8 @@ function Invoke-Anadir {
                 -CaratulasListas $p.Rutas -Log $LogGui
         # si no ha ido bien, $script:Preparado sigue puesto y Update-Botones deja el boton vivo
         if ($r.Ok) { Clear-Preview; Update-Deteccion }
+        # anadido, Steam se ha reabierto siempre: si es en Big Picture, la Vaporera se cierra
+        if ($r.Ok -and $r.CaratulasOk) { Complete-CambioSteam -Bien $true -BigPicture ([bool]$ctl.ChkBigPicture.IsChecked) -Anadir }
     } catch {
         Add-Log "ERROR: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'añadir a Steam' -Fallo $_
@@ -2041,8 +2396,10 @@ function Invoke-Quitar {
     $resp = [Windows.MessageBox]::Show($win, $texto, 'Quitar de Steam', 'YesNo', 'Question', 'No')
     if ($resp -ne 'Yes') { return }
     try {
+        # Steam solo se reabre (y en Big Picture, si esta marcado) si estaba abierto
+        $bigPicture = ([bool]$ctl.ChkBigPicture.IsChecked -and (Test-SteamCorriendo))
         $r = Invoke-QuitarJuego -Juego $j -Steam $script:Steam -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) -Log $LogGui
-        if ($r.Ok) { Clear-Preview; Update-Deteccion }
+        if ($r.Ok) { Clear-Preview; Update-Deteccion; Complete-CambioSteam -Bien $true -BigPicture $bigPicture }
     } catch {
         Add-Log "ERROR: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'quitar de Steam' -Fallo $_
@@ -2058,10 +2415,47 @@ $ctl.BtnQuitar.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitar' -TextoOcupado 'Quit
 # Los demas se preparan con su juego elegido a mano, si tienen uno guardado.
 
 # La casilla ya ha escrito en Marcado cuando llega el Click: solo falta la cuenta
-$ctl.LstJuegos.AddHandler([Windows.Controls.Primitives.ButtonBase]::ClickEvent, [Windows.RoutedEventHandler]{
+foreach ($listaJuegos in @($ctl.LstJuegos, $ctl.LstSencillo)) {
+    $listaJuegos.AddHandler([Windows.Controls.Primitives.ButtonBase]::ClickEvent, [Windows.RoutedEventHandler]{
+        param($s, $e)
+        if ($e.OriginalSource -is [Windows.Controls.CheckBox]) { Update-Botones }
+    })
+}
+
+# El primer descendiente de $Raiz (en el arbol visual) que sea de $Tipo, o $null
+function Find-Descendiente {
+    param($Raiz, [type]$Tipo)
+    for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($Raiz); $i++) {
+        $h = [Windows.Media.VisualTreeHelper]::GetChild($Raiz, $i)
+        if ($h -is $Tipo) { return $h }
+        $r = Find-Descendiente $h $Tipo
+        if ($r) { return $r }
+    }
+    return $null
+}
+
+# Con el teclado: Espacio marca o desmarca el juego que tiene el foco (las casillas no lo
+# cogen) y Enter lo selecciona. Hace falta Enter porque el foco puede estar en un juego sin
+# seleccionar (tras Refrescar, o al entrar con el tabulador) y Espacio ya no selecciona.
+# En la lista del modo sencillo no hay nada que seleccionar: Enter (A en el mando) tambien marca.
+function Invoke-TeclaLista {
     param($s, $e)
-    if ($e.OriginalSource -is [Windows.Controls.CheckBox]) { Update-Botones }
-})
+    if ($e.Key -ne 'Space' -and $e.Key -ne 'Return') { return }
+    # con el enum: comparado con el texto 'None' sale distinto siempre
+    if ([Windows.Input.Keyboard]::Modifiers -ne [Windows.Input.ModifierKeys]::None) { return }
+    $item = [Windows.Controls.ItemsControl]::ContainerFromElement($s, $e.OriginalSource)
+    if (-not $item -and $null -ne $s.SelectedItem) { $item = $s.ItemContainerGenerator.ContainerFromItem($s.SelectedItem) }
+    if (-not $item) { return }
+    $e.Handled = $true
+    if ($e.Key -eq 'Return' -and $s -eq $ctl.LstJuegos) { $item.IsSelected = $true; return }
+    # por la casilla, para que el binding lo escriba en Marcado y se vea
+    $chk = Find-Descendiente $item ([Windows.Controls.CheckBox])
+    if (-not $chk) { return }
+    $chk.IsChecked = -not [bool]$chk.IsChecked
+    Update-Botones
+}
+$ctl.LstJuegos.Add_PreviewKeyDown({ param($s, $e) Invoke-TeclaLista $s $e })
+$ctl.LstSencillo.Add_PreviewKeyDown({ param($s, $e) Invoke-TeclaLista $s $e })
 
 # Los nombres para las preguntas, sin pasarse de largo
 function Get-ListaNombres {
@@ -2090,7 +2484,7 @@ function Start-AnadirMarcados {
     $resp = [Windows.MessageBox]::Show($win, $texto, 'Añadir a Steam', 'YesNo', 'Question', 'No')
     if ($resp -ne 'Yes') { return }
 
-    if (-not (Enter-Ocupado -Boton 'BtnPreparar' -TextoOcupado 'Cancelar')) { return }
+    if (-not (Enter-Ocupado -Boton (Get-BotonTarea) -TextoOcupado 'Cancelar')) { return }
     $lanzada = $false
     try {
         $sel = $ctl.LstJuegos.SelectedItem
@@ -2161,11 +2555,12 @@ function Start-AnadirMarcados {
         [void]$script:Tareas.Add($script:Tarea)
         $script:Reloj.Start()
         $lanzada = $true
-        $ctl.PrgPreparar.Visibility = 'Visible'
+        Set-Progreso $true
         Update-Botones      # ahora que hay tarea, el boton de cancelar se enciende
     } catch {
         Add-Log "ERROR preparando los marcados: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'preparar marcados' -Fallo $_
+        Complete-CambioSteam -Bien $false -Aviso 'No se ha podido añadir nada.'
     } finally {
         if (-not $lanzada) { $script:Lote = $null; Exit-Ocupado }
     }
@@ -2176,11 +2571,12 @@ function Start-AnadirMarcados {
 function Complete-PrepararMarcados {
     param([hashtable]$Tarea, $Salida)
     $script:Tarea = $null
-    $ctl.PrgPreparar.Visibility = 'Collapsed'
+    Set-Progreso $false
     if ($Salida.Fallo) {
         Write-LogVentana "ERROR preparando las carátulas: $($Salida.Fallo.Exception.Message) No se ha añadido nada."
         Write-RegistroError -Contexto 'preparar marcados' -Fallo $Salida.Fallo
         $script:Lote = $null
+        Complete-CambioSteam -Bien $false -Aviso 'No se ha podido añadir nada.'
         Exit-Ocupado
         return
     }
@@ -2197,21 +2593,38 @@ function Invoke-FinAnadirMarcados {
     $script:Lote = $null
     try {
         if (-not $lote) { return }
-        $ctl.BtnPreparar.Content = 'Añadiendo…'   # Exit-Ocupado le devuelve su texto
+        $ctl[(Get-BotonTarea)].Content = 'Añadiendo…'   # Exit-Ocupado le devuelve su texto
         # el mismo Reemplazar con el que se decidio que preparar (la casilla ya no se puede tocar)
         $res = Invoke-AnadirJuegos -Lote $lote -Steam $script:Steam -Reemplazar:([bool]$ctl.ChkReemplazar.IsChecked) `
                    -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) -Log $LogGui
-        if ($res) {
-            # se desmarcan los que ya estan en Steam; los que han fallado siguen marcados
-            foreach ($r in $res) {
-                if ($r.Ok -or $r.Motivo -eq 'duplicado' -or $r.Motivo -eq 'repetido') { $r.Elemento.Lote.Item.Marcado = $false }
-            }
-            if (@($res | Where-Object { $_.Ok }).Count) { Clear-Preview; Update-Deteccion }
-            else { $ctl.LstJuegos.Items.Refresh() }
+        if (-not $res) {
+            Complete-CambioSteam -Bien $false -Aviso 'No se ha añadido nada: Steam no se ha cerrado.'
+            return
+        }
+        # se desmarcan los que ya estan en Steam; los que han fallado siguen marcados
+        foreach ($r in $res) {
+            if ($r.Ok -or $r.Motivo -eq 'duplicado' -or $r.Motivo -eq 'repetido') { $r.Elemento.Lote.Item.Marcado = $false }
+        }
+        $hechos = @($res | Where-Object { $_.Ok })
+        if ($hechos.Count) { Clear-Preview; Update-Deteccion }
+        else { Update-Casillas }
+        # Bien: alguno anadido, con sus caratulas, y ninguno con error (que ya estuviera no lo
+        # es). Si no se ha anadido ninguno, Steam no se ha tocado y no hace falta cerrarse.
+        $fallos = @($res | Where-Object { -not $_.Ok -and $_.Motivo -ne 'duplicado' -and $_.Motivo -ne 'repetido' }).Count
+        $sinArte = @($hechos | Where-Object { -not $_.CaratulasOk }).Count
+        if ($fallos) {
+            $t = $(if ($fallos -eq 1) { '1 juego no se ha podido añadir.' } else { "$fallos juegos no se han podido añadir." })
+            Complete-CambioSteam -Bien $false -Aviso $t
+        } elseif ($sinArte) {
+            $t = $(if ($sinArte -eq 1) { '1 juego se ha añadido' } else { "$sinArte juegos se han añadido" })
+            Complete-CambioSteam -Bien $false -Aviso "$t con las carátulas incompletas."
+        } elseif ($hechos.Count) {
+            Complete-CambioSteam -Bien $true -BigPicture ([bool]$ctl.ChkBigPicture.IsChecked) -Anadir
         }
     } catch {
         Add-Log "ERROR: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'añadir varios a Steam' -Fallo $_
+        Complete-CambioSteam -Bien $false -Aviso 'Algo ha fallado al añadir.'
     } finally {
         Exit-Ocupado
     }
@@ -2229,21 +2642,207 @@ function Invoke-QuitarMarcados {
     $resp = [Windows.MessageBox]::Show($win, $texto, 'Quitar de Steam', 'YesNo', 'Question', 'No')
     if ($resp -ne 'Yes') { return }
     try {
+        # al quitar, Steam solo se reabre (y en Big Picture, si esta marcado) si estaba abierto
+        $bigPicture = ([bool]$ctl.ChkBigPicture.IsChecked -and (Test-SteamCorriendo))
         $res = Invoke-QuitarJuegos -Juegos $marcados -Steam $script:Steam -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) -Log $LogGui
-        if ($res) {
-            foreach ($r in $res) { if ($r.Ok -or $r.Motivo -eq 'no-esta') { $r.Elemento.Marcado = $false } }
-            if (@($res | Where-Object { $_.Ok }).Count) { Clear-Preview; Update-Deteccion }
-            else { $ctl.LstJuegos.Items.Refresh() }
+        if (-not $res) {
+            Complete-CambioSteam -Bien $false -Aviso 'No se ha quitado nada: Steam no se ha cerrado.'
+            return
+        }
+        foreach ($r in $res) { if ($r.Ok -or $r.Motivo -eq 'no-esta') { $r.Elemento.Marcado = $false } }
+        $hechos = @($res | Where-Object { $_.Ok }).Count
+        if ($hechos) { Clear-Preview; Update-Deteccion }
+        else { Update-Casillas }
+        $fallos = @($res | Where-Object { -not $_.Ok -and $_.Motivo -ne 'no-esta' }).Count
+        if ($fallos) {
+            $t = $(if ($fallos -eq 1) { '1 juego no se ha podido quitar.' } else { "$fallos juegos no se han podido quitar." })
+            Complete-CambioSteam -Bien $false -Aviso $t
+        } elseif ($hechos) {
+            Complete-CambioSteam -Bien $true -BigPicture $bigPicture
         }
     } catch {
         Add-Log "ERROR: $($_.Exception.Message)"
         Write-RegistroError -Contexto 'quitar varios de Steam' -Fallo $_
+        Complete-CambioSteam -Bien $false -Aviso 'Algo ha fallado al quitar.'
     }
 }
 
 $ctl.BtnAnadirMarcados.Add_Click({ Start-AnadirMarcados })
 $ctl.BtnQuitarMarcados.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitarMarcados' -TextoOcupado 'Quitando…' -Accion { Invoke-QuitarMarcados } })
 $ctl.BtnDesmarcar.Add_Click({ if (-not $script:Ocupado) { Clear-Marcados } })
+# En el modo sencillo, el de anadir es tambien el de cancelar mientras se preparan las caratulas
+$ctl.BtnAnadirSencillo.Add_Click({ if ($script:Tarea) { Stop-TareaVentana } else { Start-AnadirMarcados } })
+$ctl.BtnQuitarSencillo.Add_Click({ Invoke-Ocupado -Boton 'BtnQuitarSencillo' -TextoOcupado 'Quitando…' -Accion { Invoke-QuitarMarcados } })
+$ctl.BtnModo.Add_Click({ if (-not $script:Ocupado) { Set-ModoSencillo (-not $script:Sencillo) -Guardar } })
+
+# --- la propia Vaporera en Steam y "Big Picture" ---------------------------
+# Para abrirla desde Big Picture con el mando. No esta en ninguna tienda: sus caratulas son las
+# de docs\steam\ (las dibuja docs\CrearIcono.ps1), sin preparar ni buscar nada.
+
+# La Vaporera como juego: se lanza como el acceso directo de CrearAccesoDirecto.ps1
+function Get-JuegoVaporera {
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $opciones = '-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + (Join-Path $Raiz 'VaporeraArcade.ps1') + '"'
+    return (New-Juego -Nombre 'Vaporera Arcade' -Fuente 'Vaporera Arcade' -Exe $ps -StartDir ($Raiz.TrimEnd('\') + '\') `
+                -LaunchOptions $opciones -Icono (Join-Path $Raiz 'docs\VaporeraArcade.ico') -Carpeta $Raiz -Detalle 'Esta aplicación')
+}
+
+# 'esta' si hay una entrada que la lanza tal cual (aunque se haya renombrado en Steam),
+# 'cambiada' si hay una con su nombre pero otra ruta (la carpeta se ha movido: se reemplaza) y
+# 'falta' si no hay ninguna
+function Get-EstadoVaporera {
+    param($Existentes)
+    $j = Get-JuegoVaporera
+    $porNombre = $false
+    foreach ($e in @($Existentes)) {
+        if (-not $e) { continue }
+        if ([string]$e.Exe -eq $j.Exe -and [string]$e.LaunchOptions -eq $j.LaunchOptions) { return 'esta' }
+        if ([string]$e.Nombre -eq $j.Nombre) { $porNombre = $true }
+    }
+    if ($porNombre) { return 'cambiada' }
+    return 'falta'
+}
+
+# Las caratulas de docs\steam\ copiadas a una carpeta de %TEMP% con los nombres que espera
+# Invoke-Caratulas (<appid>p.png...). $null si falta alguna de las imprescindibles: entonces
+# se componen como las de cualquier juego sin tienda.
+function Get-CaratulasVaporera {
+    param([uint32]$AppId)
+    $origen = Join-Path $Raiz 'docs\steam'
+    $nombres = [ordered]@{ p = 'portada.png'; cap = 'capsula.png'; hero = 'hero.png'; logo = 'logo.png'; icon = 'icono.png' }
+    $destinos = @{ p = "${AppId}p.png"; cap = "${AppId}.png"; hero = "${AppId}_hero.png"; logo = "${AppId}_logo.png"; icon = "${AppId}_icon.png" }
+    foreach ($k in $ImagenesClave.Keys) {
+        if (-not (Test-Path -LiteralPath (Join-Path $origen $nombres[$k]))) { return $null }
+    }
+    $dir = Join-Path $TempDir ('{0}-{1}' -f $AppId, (Get-Date -Format 'HHmmssfff'))
+    [void](New-Item -ItemType Directory -Path $dir -Force)
+    $rutas = @{}
+    foreach ($k in $nombres.Keys) {
+        $f = Join-Path $origen $nombres[$k]
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        $rutas[$k] = Join-Path $dir $destinos[$k]
+        Copy-Item -LiteralPath $f -Destination $rutas[$k] -Force
+    }
+    return $rutas
+}
+
+function Invoke-AnadirVaporera {
+    if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
+    try {
+        $j = Get-JuegoVaporera
+        $reemplazar = ($script:VaporeraEnSteam -eq 'cambiada')
+        if ($reemplazar) { Add-Log 'La Vaporera ya estaba en Steam con otra ruta: la actualizo.' }
+        $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $j.Exe + '"') -AppName $j.Nombre
+        $rutas = Get-CaratulasVaporera -AppId $appId
+        if (-not $rutas) { Add-Log 'Faltan las carátulas de docs\steam\: las compongo con el icono.' }
+        $r = Invoke-AnadirJuego -Juego $j -Nombre $j.Nombre -Steam $script:Steam -Reemplazar:$reemplazar `
+                -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) -CaratulasListas $rutas -OrigenArte 'Local' -Log $LogGui
+        if ($r.Ok) { Update-Deteccion }
+        if ($r.Ok -and $r.CaratulasOk) { Complete-CambioSteam -Bien $true -BigPicture ([bool]$ctl.ChkBigPicture.IsChecked) -Anadir }
+        elseif ($r.Ok) { Complete-CambioSteam -Bien $false -Aviso 'La Vaporera se ha añadido con las carátulas incompletas.' }
+        else { Complete-CambioSteam -Bien $false -Aviso 'No se ha podido añadir la Vaporera.' }
+    } catch {
+        Add-Log "ERROR añadiendo la Vaporera a Steam: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'añadir la Vaporera a Steam' -Fallo $_
+        Complete-CambioSteam -Bien $false -Aviso 'No se ha podido añadir la Vaporera.'
+    }
+}
+$ctl.BtnVaporeraSteam.Add_Click({ Invoke-Ocupado -Boton 'BtnVaporeraSteam' -TextoOcupado 'Añadiendo…' -Accion { Invoke-AnadirVaporera } })
+
+# "Big Picture": abre Steam en Big Picture (lo arranca si estaba cerrado) y cierra la Vaporera,
+# como al salir de un juego. Ocupada, el boton esta apagado.
+$ctl.BtnBigPicture.Add_Click({
+    if ($script:Ocupado -or -not $script:Steam) { return }
+    try {
+        if (Test-SteamCorriendo) { Start-Process 'steam://open/bigpicture' }
+        else { Start-Steam -SteamExe $script:Steam.Exe -BigPicture }
+    } catch {
+        Add-Log "No he podido abrir Big Picture: $($_.Exception.Message)"
+        Write-RegistroError -Contexto 'abrir Big Picture' -Fallo $_
+        return
+    }
+    Write-Registro 'Big Picture abierto: cierro la Vaporera.'
+    $win.Close()
+})
+
+# Si a la Vaporera la ha lanzado Steam (desde la biblioteca o Big Picture). Lo mira el cierre.
+# Se pregunta despues de pintar la ventana: la primera consulta a WMI tarda.
+$script:DesdeSteam = $false
+function Test-AbiertaDesdeSteam {
+    try {
+        $padre = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop).ParentProcessId
+        $p = Get-Process -Id $padre -ErrorAction Stop
+        return ($p.ProcessName -eq 'steam')
+    } catch { return $false }
+}
+
+# --- el mando -----------------------------------------------------------
+# lib\Mando.ps1 dice que botones se acaban de pulsar y aqui cada uno se convierte en la tecla
+# que hace lo mismo. Solo con una ventana de la aplicacion delante (tambien la galeria, un
+# MessageBox o el dialogo de abrir fichero). Se lee con un reloj propio: $script:Reloj solo
+# corre mientras hay tareas.
+$script:RelojMando = $null
+$script:MandosAntes = 0     # para avisar en el registro al conectar o desconectar uno
+
+# boton -> tecla virtual. A va aparte (Get-TeclaA) y LB es Mayus+Tab.
+$TeclasMando = @{
+    0x0001 = 0x26   # cruceta o stick arriba -> flecha arriba
+    0x0002 = 0x28   # abajo
+    0x0004 = 0x25   # izquierda
+    0x0008 = 0x27   # derecha
+    0x2000 = 0x1B   # B -> Escape: cierra la ventana o el desplegable
+    0x4000 = 0x20   # X -> Espacio: marca el juego en la lista
+    0x0100 = 0x09   # LB -> Mayus+Tab: el control anterior
+    0x0200 = 0x09   # RB -> Tab: el siguiente
+}
+
+# A es "pulsar lo que tiene el foco": Enter, salvo en una casilla (Espacio, Enter no la marca)
+# y en el desplegable cerrado (F4 lo abre; abierto, Enter elige). En un MessageBox o en el
+# dialogo de abrir fichero, que no son de WPF, siempre Enter.
+function Get-TeclaA {
+    if ([Windows.Interop.HwndSource]::FromHwnd([VaporeraArcade.Mando]::Ventana)) {
+        $f = [Windows.Input.Keyboard]::FocusedElement
+        if ($f -is [Windows.Controls.Primitives.ToggleButton]) { return 0x20 }
+        if ($f -is [Windows.Controls.ComboBox] -and -not $f.IsDropDownOpen) { return 0x73 }
+    }
+    return 0x0D
+}
+
+function Invoke-TicMando {
+    try {
+        foreach ($b in [VaporeraArcade.Mando]::Tic()) {
+            if ($b -eq [VaporeraArcade.Mando]::A) { [VaporeraArcade.Mando]::Pulsar((Get-TeclaA), $false) }
+            elseif ($TeclasMando.ContainsKey($b)) { [VaporeraArcade.Mando]::Pulsar($TeclasMando[$b], ($b -eq [VaporeraArcade.Mando]::LB)) }
+        }
+        # Mandos solo cambia con la ventana delante, que es cuando el aviso se lee. Sin
+        # Add-Log: bombearia mensajes dentro del tic.
+        $n = [VaporeraArcade.Mando]::Mandos
+        if ([VaporeraArcade.Mando]::Ventana -ne [IntPtr]::Zero -and $n -ne $script:MandosAntes) {
+            if ($n -and -not $script:MandosAntes) { Write-LogVentana 'Mando conectado: A pulsa, B cierra, X marca, la cruceta mueve y LB/RB saltan de un control a otro.' }
+            elseif (-not $n) { Write-LogVentana 'Mando desconectado.' }
+            $script:MandosAntes = $n
+        }
+    } catch {
+        # un fallo aqui se repetiria en cada tic: se para y la aplicacion sigue sin mando
+        $script:RelojMando.Stop()
+        Write-RegistroError -Contexto 'leer el mando' -Fallo $_
+        Write-LogVentana 'El mando ha dejado de funcionar (el detalle está en el registro). Lo demás sigue igual.'
+    }
+}
+
+# Se llama con la ventana ya en marcha: compilar el C# tarda un poco y no tiene que retrasar
+# que aparezca. Si no se puede (antivirus, modo restringido), la aplicacion sigue sin mando.
+function Start-Mando {
+    try { Initialize-Mando }
+    catch {
+        Write-Registro "Sin mando: no he podido cargar la lectura de XInput ($($_.Exception.Message)). Lo demás funciona igual."
+        return
+    }
+    $script:RelojMando = New-Object Windows.Threading.DispatcherTimer
+    $script:RelojMando.Interval = [TimeSpan]::FromMilliseconds(40)
+    $script:RelojMando.Add_Tick({ Invoke-TicMando })
+    $script:RelojMando.Start()
+}
 
 # "Preparar caratulas" deja cada juego en %TEMP%\VaporeraArcade\<appid>-<hora>\ (~1,6 MB) y
 # solo se borra al volver a preparar el mismo appid: lo preparado y no anadido, o lo de un
@@ -2277,18 +2876,44 @@ if ($script:Steam) {
 } else {
     $ctl.TxtSteam.Text = Get-SteamMotivo
 }
-Update-Botones
+# en el ultimo modo usado (Set-ModoSencillo tambien llama a Update-Botones)
+$modoGuardado = $false
+try { $modoGuardado = ((Get-Config)['ModoSencillo'] -eq $true) }
+catch { Write-Registro "No he podido leer el modo guardado: $($_.Exception.Message)" }
+Set-ModoSencillo $modoGuardado
+if ($modoGuardado) { Write-Registro 'Arranca en el modo sencillo.' }
 
 # Con una operacion en marcha Steam esta cerrado y el VDF puede estar a medio escribir, asi que
 # la X de la ventana tampoco vale: Update-Interfaz deja que WPF la atienda ahi en medio.
 # Preparar caratulas es otra cosa: solo escribe en %TEMP%, se cancela y se cierra.
 # Aqui nada de Add-Log: llamaria a Update-Interfaz estando ya dentro de una.
+# Abierta desde Steam, Steam la trata como un juego en marcha y al cerrarse le pide que se
+# cierre: pasa siempre que anade o quita, porque es la propia Vaporera la que cierra Steam. Se
+# queda (Steam tarda unos 10 s mas y se cierra igual) y lo explica.
 $win.Add_Closing({
     if ($script:Tarea) { Stop-TareaVentana; return }
     if ($script:Ocupado) {
         $_.Cancel = $true
-        Write-LogVentana 'Espera a que termine la operación en curso.'
+        if ($script:DesdeSteam) { Write-LogVentana 'Steam pide cerrar la Vaporera al cerrarse (la abriste desde Steam): sigue abierta hasta terminar.' }
+        else { Write-LogVentana 'Espera a que termine la operación en curso.' }
     }
 })
-$win.Add_ContentRendered({ Invoke-Ocupado { Update-Deteccion } })
+
+# Si la ventana sale detras (o se vuelve a ella desde Big Picture), al ponerla delante WPF no
+# siempre le da el foco a nadie, y el teclado no hace nada hasta pulsar el tabulador. Despues
+# de que WPF haga lo suyo: si no ha puesto el foco en ningun sitio, al que lo tenia o a la lista.
+$win.Add_Activated({
+    [void]$win.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Input, [action]{
+        if ($script:Ocupado -or -not $win.IsActive -or [Windows.Input.Keyboard]::FocusedElement) { return }
+        $f = [Windows.Input.FocusManager]::GetFocusedElement($win)
+        if (-not (Test-ControlUsable $f)) { $f = Get-FocoLista }
+        [void]$f.Focus()
+    })
+})
+$win.Add_ContentRendered({
+    Invoke-Ocupado { Update-Deteccion }
+    Start-Mando
+    $script:DesdeSteam = Test-AbiertaDesdeSteam
+    if ($script:DesdeSteam) { Write-Registro 'Abierta desde Steam.' }
+})
 [void]$win.ShowDialog()

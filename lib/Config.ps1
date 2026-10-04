@@ -4,8 +4,9 @@
 #  Se guardan en %LOCALAPPDATA%\VaporeraArcade\config.json, fuera de la
 #  carpeta de la aplicacion: asi funciona aunque este instalada en una
 #  ruta sin permiso de escritura y la clave nunca acaba en el repositorio.
-#  Lo que hay: la clave de SteamGridDB ('SgdbClave') y los juegos elegidos
-#  a mano para las caratulas ('JuegosElegidos', mas abajo).
+#  Lo que hay: la clave de SteamGridDB ('SgdbClave'), los juegos elegidos
+#  a mano para las caratulas ('JuegosElegidos', mas abajo) y si se arranca
+#  en el modo sencillo ('ModoSencillo', lo lee y escribe VaporeraArcade.ps1).
 # =====================================================================
 
 function Get-ConfigRuta {

@@ -1,5 +1,5 @@
 ﻿# =====================================================================
-#  CrearIcono.ps1 - Genera docs\VaporeraArcade.ico
+#  CrearIcono.ps1 - Genera docs\VaporeraArcade.ico y las caratulas de Steam de la Vaporera
 #
 #    powershell -NoProfile -ExecutionPolicy Bypass -File .\docs\CrearIcono.ps1 [-Vista <png>]
 #
@@ -8,8 +8,10 @@
 #  a cada tamano, no se reduce el de 256: asi los pequenos salen nitidos.
 #  El .ico lleva cada tamano como PNG dentro (valido desde Windows Vista). Lo usan el acceso
 #  directo que crea CrearAccesoDirecto.ps1 y la ventana de la aplicacion.
+#  Las caratulas (docs\steam\: portada, capsula, hero, logo e icono, a las medidas de Steam)
+#  son las que pone "Anadir Vaporera a Steam": la aplicacion no esta en ninguna tienda.
 #  -Vista guarda ademas una hoja con los tamanos, para revisarlo sin abrir el .ico.
-#  Solo hace falta para cambiar el icono: no va en el ZIP de las releases.
+#  Solo hace falta para cambiar el icono: no va en el ZIP de las releases (lo que genera, si).
 # =====================================================================
 param([string]$Vista = '')
 
@@ -42,12 +44,15 @@ function New-Redondeado([single]$X, [single]$Y, [single]$W, [single]$H, [single]
     return $p
 }
 
-# Todo en coordenadas de 256x256; New-Icono escala al tamano pedido
-function Invoke-Dibujo($G) {
+# Todo en coordenadas de 256x256; New-Icono escala al tamano pedido. -SinFondo es la olla
+# suelta, para ponerla sobre las caratulas de Steam.
+function Invoke-Dibujo($G, [switch]$SinFondo) {
     # fondo: cuadrado redondeado con degradado, como las baldosas de Windows 11
-    $p = New-Redondeado 8 8 240 240 52
-    $br = New-Object Drawing.Drawing2D.LinearGradientBrush((New-Object Drawing.PointF(0, 8)), (New-Object Drawing.PointF(0, 248)), $Fondo1, $Fondo2)
-    $G.FillPath($br, $p); $br.Dispose(); $p.Dispose()
+    if (-not $SinFondo) {
+        $p = New-Redondeado 8 8 240 240 52
+        $br = New-Object Drawing.Drawing2D.LinearGradientBrush((New-Object Drawing.PointF(0, 8)), (New-Object Drawing.PointF(0, 248)), $Fondo1, $Fondo2)
+        $G.FillPath($br, $p); $br.Dispose(); $p.Dispose()
+    }
 
     # vapor: dos curvas en S a los lados de la palanca
     $pen = New-Object Drawing.Pen($Claro, 13)
@@ -115,6 +120,101 @@ try {
     [IO.File]::WriteAllBytes($Destino, $salida.ToArray())
 } finally { $bw.Dispose(); $salida.Dispose() }
 Write-Host "Creado $Destino ($($Tamanos -join ', ') px)"
+
+# --- las caratulas de Steam (docs\steam\) -------------------------------
+$DirSteam = Join-Path $PSScriptRoot 'steam'
+[void][IO.Directory]::CreateDirectory($DirSteam)
+
+function New-Lienzo([int]$Ancho, [int]$Alto) {
+    $bm = New-Object Drawing.Bitmap -ArgumentList $Ancho, $Alto, ([Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [Drawing.Graphics]::FromImage($bm)
+    $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'
+    $g.TextRenderingHint = 'AntiAliasGridFit'
+    $g.Clear([Drawing.Color]::Transparent)
+    return @{ Bitmap = $bm; G = $g }
+}
+
+# El fondo de la ventana (degradado de arriba abajo) con un resplandor rojo detras de la olla
+function Add-Fondo($G, [int]$Ancho, [int]$Alto, [single]$CentroX, [single]$CentroY, [single]$Radio) {
+    $br = New-Object Drawing.Drawing2D.LinearGradientBrush((New-Object Drawing.PointF(0, 0)), (New-Object Drawing.PointF(0, $Alto)), $Fondo1, $Fondo2)
+    $G.FillRectangle($br, 0, 0, $Ancho, $Alto); $br.Dispose()
+    $elipse = New-Object Drawing.Drawing2D.GraphicsPath
+    $lado = [single]($Radio * 2)
+    $elipse.AddEllipse([single]($CentroX - $Radio), [single]($CentroY - $Radio), $lado, $lado)
+    $brillo = New-Object Drawing.Drawing2D.PathGradientBrush($elipse)
+    $brillo.CenterColor = Get-Color '#DC1E23' 70
+    $brillo.SurroundColors = @([Drawing.Color]::FromArgb(0, 21, 23, 27))
+    $G.FillPath($brillo, $elipse); $brillo.Dispose(); $elipse.Dispose()
+}
+
+# La olla suelta, de $Lado px, con la esquina de arriba a la izquierda en ($X, $Y)
+function Add-Olla($G, [single]$X, [single]$Y, [single]$Lado) {
+    $estado = $G.Save()
+    $G.TranslateTransform($X, $Y)
+    $G.ScaleTransform([single]($Lado / 256), [single]($Lado / 256))
+    Invoke-Dibujo $G -SinFondo
+    $G.Restore($estado)
+}
+
+# "Vaporera" en rojo y "Arcade" en claro, en dos lineas que empiezan en ($X, $Y). -Centrado:
+# $X es el centro. Devuelve el ancho del texto.
+function Add-Nombre($G, [single]$X, [single]$Y, [single]$Tamano, [switch]$Centrado) {
+    $fuente = New-Object Drawing.Font('Segoe UI Semibold', $Tamano, [Drawing.GraphicsUnit]::Pixel)
+    $formato = [Drawing.StringFormat]::GenericTypographic
+    $ancho = 0
+    $lineas = @(@('Vaporera', $Rojo), @('Arcade', $Claro))
+    for ($i = 0; $i -lt 2; $i++) {
+        $texto = $lineas[$i][0]
+        $medida = $G.MeasureString($texto, $fuente, 10000, $formato)
+        if ($medida.Width -gt $ancho) { $ancho = $medida.Width }
+        # ojo: $xLinea, no $x, que para PowerShell es el mismo $X del parametro
+        $xLinea = $X; if ($Centrado) { $xLinea = [single]($X - $medida.Width / 2) }
+        $br = New-Object Drawing.SolidBrush($lineas[$i][1])
+        $G.DrawString($texto, $fuente, $br, $xLinea, [single]($Y + $i * $Tamano * 1.05), $formato)
+        $br.Dispose()
+    }
+    $fuente.Dispose()
+    return $ancho
+}
+
+function Save-Caratula($Lienzo, [string]$Nombre) {
+    $Lienzo.G.Dispose()
+    $ruta = Join-Path $DirSteam $Nombre
+    $Lienzo.Bitmap.Save($ruta, [Drawing.Imaging.ImageFormat]::Png)
+    $Lienzo.Bitmap.Dispose()
+    Write-Host "Creado $ruta"
+}
+
+# portada 600x900: la olla grande y el nombre debajo
+$l = New-Lienzo 600 900
+Add-Fondo $l.G 600 900 300 330 330
+Add-Olla $l.G 120 140 360
+[void](Add-Nombre $l.G 300 540 104 -Centrado)
+Save-Caratula $l 'portada.png'
+
+# capsula 460x215: la olla a la izquierda y el nombre a su lado
+$l = New-Lienzo 460 215
+Add-Fondo $l.G 460 215 110 108 150
+Add-Olla $l.G 22 28 170
+[void](Add-Nombre $l.G 196 48 58)
+Save-Caratula $l 'capsula.png'
+
+# hero 1920x620: solo el fondo con la olla a la derecha; Steam pone el logo encima, abajo a
+# la izquierda
+$l = New-Lienzo 1920 620
+Add-Fondo $l.G 1920 620 1450 330 520
+Add-Olla $l.G 1200 70 500
+Save-Caratula $l 'hero.png'
+
+# logo: transparente, solo el nombre (la olla ya esta en el hero); Steam lo pinta encima
+$l = New-Lienzo 560 250
+[void](Add-Nombre $l.G 8 8 108)
+Save-Caratula $l 'logo.png'
+
+# icono 256 (el de la lista de la biblioteca): el mismo del .ico
+$l = New-Lienzo 256 256
+Invoke-Dibujo $l.G
+Save-Caratula $l 'icono.png'
 
 if ($Vista) {
     # cada tamano a su medida real, sobre claro y sobre un escritorio azul

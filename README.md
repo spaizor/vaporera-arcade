@@ -42,6 +42,11 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   repetidos los que tengan el mismo nombre, o el mismo ejecutable con las mismas opciones.
 - **Copia de seguridad** de `shortcuts.vdf` antes de cada escritura.
 - **Reabre Steam** al terminar, en Big Picture si lo prefieres.
+- **Se maneja con el teclado o con un mando** de Xbox (o compatible), sin ratón.
+- **Modo sencillo**: solo los juegos, en grande, para marcarlos y añadirlos o quitarlos con el
+  mando.
+- **Se añade a sí misma a Steam**, con sus carátulas, para abrirla desde Big Picture con el
+  mando. El botón **Big Picture** te devuelve a Steam y la cierra.
 
 ## Requisitos
 
@@ -50,6 +55,7 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
 - Steam instalado, con al menos una sesión iniciada en el equipo.
 - Conexión a internet para descargar las carátulas. Sin conexión, las compone con las imágenes
   que traiga el propio juego.
+- Opcional: un mando de Xbox o uno compatible con XInput (muchos tienen un modo «X-input»).
 
 ## Instalación
 
@@ -142,9 +148,63 @@ selecciona.
 
 Casillas de la parte inferior:
 
-- **Reabrir Steam en Big Picture:** al terminar abre Steam directamente en modo Big Picture.
+- **Reabrir Steam en Big Picture:** al terminar abre Steam directamente en modo Big Picture. Si
+  todo ha ido bien, la aplicación se cierra, también al quitar, porque Big Picture la taparía.
+  Si algo falla, se queda abierta para que veas qué ha pasado.
 - **Reemplazar si ya existe:** sobrescribe el acceso directo si ya había uno con el mismo
   nombre o el mismo ejecutable.
+
+### Con el teclado o con el mando, desde Big Picture
+
+Todo se puede hacer sin ratón. Con el teclado: el tabulador (y Mayús+Tab) pasa de un control a
+otro, las flechas se mueven por la lista y por la galería, **Enter** pulsa (y selecciona el
+juego de la lista que tiene el foco), **Espacio** marca o desmarca un juego, **Escape** cierra
+la ventana abierta y **F4** abre el desplegable del origen de las carátulas.
+
+Con un mando, cada botón hace lo de una tecla:
+
+| Mando | Hace |
+|---|---|
+| Cruceta o stick izquierdo | Moverse (si lo mantienes, se repite) |
+| A | Pulsar lo que tiene el foco: un botón, una casilla, el desplegable, un juego de la lista |
+| B | Cerrar la ventana o el desplegable |
+| X | Marcar o desmarcar el juego en la lista |
+| LB / RB | Ir al control anterior o al siguiente |
+
+El mando solo maneja la aplicación cuando su ventana está delante: si juegas a otra cosa, no
+le hace nada. Al conectarlo, el registro de la ventana lo dice. Para escribir (el nombre, el
+buscador, la clave de SteamGridDB) hace falta un teclado, de verdad o el de pantalla de Windows.
+
+**Para abrirla desde Big Picture**, pulsa **Añadir Vaporera a Steam**, arriba a la derecha: la
+añade a tu biblioteca con sus propias carátulas, como cualquier otro juego (cierra Steam y lo
+vuelve a abrir). El botón ya no sale una vez está añadida; si mueves la carpeta de la
+aplicación, sale como **Actualizar Vaporera en Steam** para corregir la ruta. Y **Big Picture**,
+a su lado, abre Steam en Big Picture (o lo arranca) y cierra la aplicación, como al salir de un
+juego.
+
+Si la abres desde Steam, Steam la trata como un juego en marcha: cuando la aplicación cierra
+Steam para añadir o quitar algo, Steam le pide que se cierre, ella sigue hasta terminar (lo
+dice el registro) y Steam tarda unos segundos más en cerrarse.
+
+### Modo sencillo
+
+El botón **Modo sencillo**, arriba a la derecha, deja solo lo justo para el mando: la lista de
+juegos en grande y los botones **Añadir marcados** y **Quitar marcados**. Marca los juegos
+con **A** o **X** (con el teclado, Enter o Espacio) y pulsa *Añadir marcados*, aunque sea uno
+solo. **Modo avanzado** vuelve a la ventana completa, y la aplicación se abre en el último
+modo que usaste.
+
+![El modo sencillo: la lista de juegos en grande, con sus casillas, y debajo los botones «Añadir marcados» y «Quitar marcados»](docs/captura-sencillo.png)
+
+- **Solo salen los juegos** de Xbox / Game Pass, Epic, GOG y Ubisoft. Las apps de la Store,
+  los programas recientes y los elegidos con *Examinar .exe…* se quedan en el modo avanzado.
+- **Usa lo que tengas puesto en el modo avanzado**: el origen de las carátulas, el juego
+  elegido a mano de cada uno, *Reabrir Steam en Big Picture* y *Reemplazar si ya existe*.
+- **Al terminar de añadir, la aplicación se cierra sola** (también con *Añadir Vaporera a
+  Steam*): Steam se vuelve a abrir y la taparía, y con el mando no podrías volver a ella. Si
+  algo falla, o un juego se queda sin todas sus carátulas, se queda abierta y lo dice debajo
+  de los botones. El detalle está en el registro del modo avanzado.
+- Mientras se preparan las carátulas, *Añadir marcados* pasa a ser **Cancelar**.
 
 ## De dónde salen las carátulas
 
@@ -226,6 +286,8 @@ Son limitaciones de Steam y de cada plataforma, no de esta aplicación:
 - **Steam tiene que cerrarse** para modificar `shortcuts.vdf`; si no, lo sobrescribe al salir.
   La aplicación lo cierra sola y espera hasta 40 segundos. Si no se cierra, cancela la operación
   sin tocar nada.
+- **El mando tiene que ser XInput** (de Xbox o compatible). Los de PlayStation o Switch
+  funcionan a través de Steam Input o de programas como DS4Windows.
 
 ## Privacidad y conexiones
 
@@ -255,7 +317,7 @@ que después pulses una imagen de la vista previa para elegir otra.
   al que le hayas elegido a mano de qué juego son las carátulas, la **ruta de su ejecutable**
   (que puede incluir tu nombre de usuario de Windows), sus opciones de lanzamiento y el juego
   elegido: si es de la Store o de SteamGridDB, su identificador y su título. Cada uno se borra
-  con el botón **Olvidar**.
+  con el botón **Olvidar**. Y si la usaste por última vez en el modo sencillo.
 - `%LOCALAPPDATA%\VaporeraArcade\vaporera-arcade.log`: el registro de actividad. Contiene
   **rutas completas** (que incluyen tu nombre de usuario de Windows), los nombres de los juegos
   que tienes instalados y el **identificador de tu perfil de Steam**. Míralo antes de pegarlo
@@ -311,6 +373,7 @@ Vaporera Arcade
 ├── CrearAccesoDirecto.ps1       desbloquea los ficheros y crea el acceso directo
 ├── docs
 │   ├── VaporeraArcade.ico       icono del acceso directo y de la ventana
+│   ├── steam\*.png              las carátulas de la propia aplicación en Steam
 │   └── captura*.png             las capturas de este README
 └── lib
     ├── Config.ps1               ajustes del usuario (config.json en %LOCALAPPDATA%)
@@ -318,12 +381,13 @@ Vaporera Arcade
     ├── Fuentes.ps1              detección de juegos según su origen
     ├── Caratulas.ps1            descarga y composición de carátulas
     ├── SteamCtl.ps1             localizar, cerrar y abrir Steam, y editar shortcuts.vdf
-    └── Tareas.ps1               trabajo en segundo plano, para que la ventana no se congele
+    ├── Tareas.ps1               trabajo en segundo plano, para que la ventana no se congele
+    └── Mando.ps1                lectura del mando (XInput)
 ```
 
 Los ajustes y el registro de actividad se guardan fuera de la carpeta de la aplicación, en
-`%LOCALAPPDATA%\VaporeraArcade\`: `config.json` (la clave de SteamGridDB y los juegos elegidos
-a mano para las carátulas) y
+`%LOCALAPPDATA%\VaporeraArcade\`: `config.json` (la clave de SteamGridDB, los juegos elegidos
+a mano para las carátulas y el modo en el que se abre) y
 `vaporera-arcade.log`. Así funciona también instalada en una carpeta sin permiso de escritura,
 como `Archivos de programa`. Si algo falla, el detalle del error está en ese `.log`. La primera
 línea de cada arranque lleva la versión de la aplicación, la de PowerShell y la de Windows: es lo que conviene adjuntar al informar de un fallo. La versión también aparece
@@ -341,8 +405,8 @@ junto al nombre en la cabecera de la ventana.
 El repositorio tiene una carpeta `tests\` (no va en el ZIP de las releases) con tests de
 [Pester 5](https://pester.dev) para lo delicado: la lectura y escritura de `shortcuts.vdf`
 byte a byte, el cálculo del appid, los duplicados, añadir y quitar accesos directos, la
-limpieza de carátulas, la comparación de títulos, los ajustes de `config.json` y el trabajo en
-segundo plano. No tocan Steam ni tus ajustes: trabajan sobre ficheros temporales. Se lanzan
+limpieza de carátulas, la comparación de títulos, los ajustes de `config.json`, el trabajo en
+segundo plano y cuándo cuenta una pulsación del mando. No tocan Steam ni tus ajustes: trabajan sobre ficheros temporales. Se lanzan
 desde Windows PowerShell 5.1, en la carpeta del repositorio:
 
 ```powershell
@@ -354,6 +418,11 @@ instalar la versión 5.
 
 ## Historial de versiones
 
+- **1.1** (04-10-2026): se maneja con el teclado o con un mando de Xbox (o compatible), y
+  tiene un modo sencillo con solo los juegos para usarla desde Big Picture. Se puede añadir a
+  sí misma a Steam, y el botón «Big Picture» vuelve a Steam y la cierra. Cuando Steam se
+  reabre en Big Picture, también se cierra sola. El juego elegido a mano en la galería se
+  recuerda para las próximas veces.
 - **1.0** (28-09-2026): añadir o quitar varios juegos a la vez cerrando Steam una sola vez.
   En la vista previa, cargar una imagen propia o elegir el juego correcto cuando la búsqueda
   acierta con otro. La Store se consulta con el país y el idioma de Windows, los DLC de Xbox
