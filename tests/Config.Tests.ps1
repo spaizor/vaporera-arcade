@@ -213,3 +213,34 @@ Describe 'Juegos elegidos a mano' {
         (Find-JuegoElegido -Lista @($null, $uno) -Exe 'C:\a.exe').Id | Should -Be '1'
     }
 }
+
+Describe 'Juegos vistos (para marcar los nuevos)' {
+    BeforeEach { Use-ConfigDePrueba }
+
+    It 'la huella no guarda la ruta, no distingue mayúsculas y cambia con las opciones' {
+        $h = Get-HuellaJuego -Exe 'C:\Users\Alguien\Juegos\Juego.exe'
+        $h | Should -Match '^[0-9a-f]{16}$'
+        Get-HuellaJuego -Exe 'c:\users\ALGUIEN\juegos\juego.exe' | Should -BeExactly $h
+        Get-HuellaJuego -Exe $script:Ubi -Opciones 'uplay://launch/80/0' |
+            Should -Not -Be (Get-HuellaJuego -Exe $script:Ubi -Opciones 'uplay://launch/410/0')
+    }
+    It 'sin guardar nunca, $null (la primera vez no se marca nada)' {
+        Get-JuegosVistos | Should -BeNullOrEmpty
+        (Get-JuegosVistos) -eq $null | Should -BeTrue
+    }
+    It 'guarda y lee las huellas sin repetir, y en config.json no hay rutas' {
+        $a = Get-HuellaJuego -Exe 'C:\Users\Alguien\a.exe'
+        $b = Get-HuellaJuego -Exe 'C:\Users\Alguien\b.exe'
+        Set-JuegosVistos -Huellas @($a, $b, $a)
+        $v = Get-JuegosVistos
+        $v -is [hashtable] | Should -BeTrue
+        $v.Count | Should -Be 2
+        $v.ContainsKey($a) | Should -BeTrue
+        Get-Json | Should -Not -Match 'Alguien'
+    }
+    It 'con uno solo sigue siendo una lista en config.json' {
+        Set-JuegosVistos -Huellas @('0123456789abcdef')
+        (Get-JuegosVistos).ContainsKey('0123456789abcdef') | Should -BeTrue
+        Get-Json | Should -Match '"JuegosVistos":\s*\[\s*"0123456789abcdef"\s*\]'
+    }
+}

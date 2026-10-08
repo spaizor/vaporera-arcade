@@ -5,8 +5,11 @@
 #  carpeta de la aplicacion: asi funciona aunque este instalada en una
 #  ruta sin permiso de escritura y la clave nunca acaba en el repositorio.
 #  Lo que hay: la clave de SteamGridDB ('SgdbClave'), los juegos elegidos
-#  a mano para las caratulas ('JuegosElegidos', mas abajo) y si se arranca
-#  en el modo sencillo ('ModoSencillo', lo lee y escribe VaporeraArcade.ps1).
+#  a mano para las caratulas ('JuegosElegidos', mas abajo), los juegos ya
+#  vistos para marcar los nuevos ('JuegosVistos', al final) y lo que lee y
+#  escribe VaporeraArcade.ps1: si se arranca en el modo sencillo
+#  ('ModoSencillo') y las casillas y el origen de las caratulas
+#  ('IncluirApps', 'IncluirRecientes', 'BigPicture', 'OrigenArte').
 # =====================================================================
 
 function Get-ConfigRuta {
@@ -117,4 +120,36 @@ function Remove-JuegoElegido {
     $lista = @($antes | Where-Object { -not ($_.Exe -eq $Exe -and $_.Opciones -eq $Opciones) })
     if ($lista.Count -ne $antes.Count) { Set-ConfigValor -Nombre 'JuegosElegidos' -Valor $lista }
     return $lista
+}
+
+# ---------------------------------------------------------------------
+#  Los juegos ya vistos, para marcar los nuevos ('JuegosVistos')
+#
+#  Se guarda una huella de cada juego (de su exe y de las opciones con las que se detecto) y
+#  no la ruta: asi config.json no lleva la lista de lo instalado con el nombre de usuario de
+#  Windows dentro. Sin la clave (la primera vez) no hay con que comparar y no se marca ninguno.
+# ---------------------------------------------------------------------
+
+# 16 caracteres hexadecimales del SHA-256, sin distinguir mayusculas (rutas de Windows)
+function Get-HuellaJuego {
+    param([string]$Exe, [string]$Opciones = '')
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(("$Exe|$Opciones").ToLowerInvariant())) }
+    finally { $sha.Dispose() }
+    return (-join ($bytes[0..7] | ForEach-Object { $_.ToString('x2') }))
+}
+
+# Las huellas guardadas como tabla (huella -> $true), o $null si nunca se ha guardado ninguna.
+# Una tabla y no una lista: vacia, una lista se quedaria en $null al devolverla.
+function Get-JuegosVistos {
+    $cfg = Get-Config
+    if (-not $cfg.ContainsKey('JuegosVistos')) { return $null }
+    $vistos = @{}
+    foreach ($h in @($cfg['JuegosVistos'])) { if ($h) { $vistos[[string]$h] = $true } }
+    return $vistos
+}
+
+function Set-JuegosVistos {
+    param([string[]]$Huellas = @())
+    Set-ConfigValor -Nombre 'JuegosVistos' -Valor @($Huellas | Where-Object { $_ } | Sort-Object -Unique)
 }

@@ -54,6 +54,135 @@ Describe 'Find-ShortcutDuplicado' {
     }
 }
 
+Describe 'Find-ShortcutParaQuitar' {
+    BeforeAll {
+        # dos del mismo nombre: la vieja (otro exe, que ya no arranca) va delante de la buena
+        $existentes = @(
+            [pscustomobject]@{ Indice = '0'; Nombre = 'Mi Juego'; Exe = 'C:\Viejo\Juego.exe'; LaunchOptions = '' }
+            [pscustomobject]@{ Indice = '1'; Nombre = 'Mi Juego'; Exe = 'C:\Juegos\Juego.exe'; LaunchOptions = '' }
+            [pscustomobject]@{ Indice = '2'; Nombre = 'Renombrado'; Exe = 'C:\Otro\Otro.exe'; LaunchOptions = '-x' }
+        )
+    }
+
+    It 'prefiere la del nombre, exe y opciones a la primera del nombre' {
+        Find-ShortcutParaQuitar -Existentes $existentes -Nombre 'Mi Juego' -Exe 'C:\Juegos\Juego.exe' | Should -Be '1'
+        Find-ShortcutParaQuitar -Existentes $existentes -Nombre 'Mi Juego' -Exe 'C:\Viejo\Juego.exe' | Should -Be '0'
+    }
+    It 'luego la del exe y las opciones, aunque se llame distinto' {
+        Find-ShortcutParaQuitar -Existentes $existentes -Nombre 'Otro' -Exe 'C:\Otro\Otro.exe' -LaunchOptions '-x' | Should -Be '2'
+    }
+    It 'y si no, la primera con su nombre' {
+        Find-ShortcutParaQuitar -Existentes $existentes -Nombre 'Mi Juego' -Exe 'C:\Nuevo.exe' | Should -Be '0'
+    }
+    It 'sin ninguna que case, nada' {
+        Find-ShortcutParaQuitar -Existentes $existentes -Nombre 'Nuevo' -Exe 'C:\Nuevo.exe' | Should -BeNullOrEmpty
+        Find-ShortcutParaQuitar -Existentes $null -Nombre 'Nuevo' -Exe 'C:\Nuevo.exe' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-EstadoEnSteam' {
+    BeforeAll {
+        $existentes = @(
+            [pscustomobject]@{ Indice = '0'; Nombre = 'Rayman Origins'; Exe = $script:Ubi; LaunchOptions = 'uplay://launch/80/0' }
+            [pscustomobject]@{ Indice = '1'; Nombre = 'Mi Juego'; Exe = 'C:\Juegos\Juego.exe'; LaunchOptions = '-ventana' }
+        )
+    }
+
+    It 'con su exe y sus opciones está en Steam, aunque allí se llame distinto' {
+        $r = Get-EstadoEnSteam -Existentes $existentes -Nombre 'Rayman' -Exe $script:Ubi -LaunchOptions 'uplay://launch/80/0'
+        $r.Estado | Should -Be 'en-steam'
+        $r.Entrada.Indice | Should -Be '0'
+    }
+    It 'con su nombre y su exe también, aunque las opciones se editaran al añadirlo' {
+        (Get-EstadoEnSteam -Existentes $existentes -Nombre 'Mi Juego' -Exe 'C:\Juegos\Juego.exe').Estado | Should -Be 'en-steam'
+    }
+    It 'con su nombre y otro exe está cambiado (las mayúsculas de la ruta no cuentan)' {
+        $r = Get-EstadoEnSteam -Existentes $existentes -Nombre 'Mi Juego' -Exe 'D:\Juegos\Juego.exe'
+        $r.Estado | Should -Be 'cambiado'
+        $r.Entrada.Indice | Should -Be '1'
+        (Get-EstadoEnSteam -Existentes $existentes -Nombre 'Mi Juego' -Exe 'c:\JUEGOS\juego.exe').Estado | Should -Be 'en-steam'
+    }
+    It 'otro juego del mismo lanzador no está en Steam' {
+        $r = Get-EstadoEnSteam -Existentes $existentes -Nombre 'Rayman Legends' -Exe $script:Ubi -LaunchOptions 'uplay://launch/410/0'
+        $r.Estado | Should -Be ''
+        $r.Entrada | Should -BeNullOrEmpty
+    }
+    It 'casa con lo mismo que Find-ShortcutDuplicado: <Caso>' -ForEach @(
+        @{ Caso = 'por exe';    Nombre = 'X';        Exe = 'C:\Juegos\Juego.exe'; Opc = '-ventana' }
+        @{ Caso = 'por nombre'; Nombre = 'Mi Juego'; Exe = 'C:\otro.exe';         Opc = '' }
+        @{ Caso = 'ninguno';    Nombre = 'Nuevo';    Exe = 'C:\nuevo.exe';        Opc = '' }
+    ) {
+        $estado = (Get-EstadoEnSteam -Existentes $existentes -Nombre $Nombre -Exe $Exe -LaunchOptions $Opc).Estado
+        $dup = Find-ShortcutDuplicado -Existentes $existentes -Nombre $Nombre -Exe $Exe -LaunchOptions $Opc
+        ($estado -ne '') | Should -Be ($null -ne $dup)
+    }
+}
+
+Describe 'Get-EntradasSinJuego' {
+    BeforeAll {
+        $existentes = @(
+            [pscustomobject]@{ Indice = '0'; Nombre = 'Rayman Origins'; Exe = $script:Ubi; LaunchOptions = 'uplay://launch/80/0' }
+            [pscustomobject]@{ Indice = '1'; Nombre = 'Mi Juego'; Exe = 'C:\Viejo\Juego.exe'; LaunchOptions = '' }
+            [pscustomobject]@{ Indice = '2'; Nombre = 'Mi Juego'; Exe = 'C:\Juegos\Juego.exe'; LaunchOptions = '' }
+            [pscustomobject]@{ Indice = '3'; Nombre = 'Emulador'; Exe = 'C:\Emu\emu.exe'; LaunchOptions = '' }
+            [pscustomobject]@{ Indice = '4'; Nombre = 'Vaporera Arcade'; Exe = 'C:\ps.exe'; LaunchOptions = '-File "C:\Vieja\v.ps1"' }
+        )
+        $juegos = @(
+            [pscustomobject]@{ Nombre = 'Mi Juego'; Exe = 'C:\Juegos\Juego.exe'; LaunchOptions = '' }
+            [pscustomobject]@{ Nombre = 'Otro'; Exe = 'C:\otro.exe'; LaunchOptions = '' }
+        )
+        $vaporera = [pscustomobject]@{ Nombre = 'Vaporera Arcade'; Exe = 'C:\ps.exe'; LaunchOptions = '-File "C:\Nueva\v.ps1"' }
+    }
+
+    It 'devuelve las que no le tocan a ningún juego, también la vieja del mismo nombre' {
+        $r = @(Get-EntradasSinJuego -Existentes $existentes -Juegos $juegos -Excluir @($vaporera))
+        $r.Indice | Should -Be @('0', '1', '3')
+    }
+    It 'la de un juego cambiado le toca a él y no sale' {
+        $cambiado = [pscustomobject]@{ Nombre = 'Rayman Origins'; Exe = 'D:\Ubisoft\UbisoftConnect.exe'; LaunchOptions = 'uplay://launch/80/0' }
+        $r = @(Get-EntradasSinJuego -Existentes $existentes -Juegos @($juegos + $cambiado) -Excluir @($vaporera))
+        $r.Indice | Should -Be @('1', '3')
+    }
+    It 'lo excluido no sale aunque tenga otra ruta (casa por el nombre)' {
+        $r = @(Get-EntradasSinJuego -Existentes $existentes -Juegos @() -Excluir @($vaporera))
+        $r.Indice | Should -Not -Contain '4'
+        @(Get-EntradasSinJuego -Existentes $existentes -Juegos @()).Count | Should -Be 5
+    }
+    It 'sin entradas, nada' {
+        @(Get-EntradasSinJuego -Existentes @() -Juegos $juegos).Count | Should -Be 0
+    }
+}
+
+Describe 'Test-EntradaNoInstalada' {
+    BeforeAll {
+        $raiz = [IO.Path]::GetPathRoot($TestDrive)
+        $exe = Join-Path $TestDrive 'existe.exe'
+        Set-Content -LiteralPath $exe -Value 'x'
+        function New-Entrada([string]$e, [string]$o = '') { [pscustomobject]@{ Indice = '0'; Nombre = 'X'; Exe = $e; LaunchOptions = $o } }
+    }
+
+    It 'con el exe en su sitio sigue instalado' {
+        Test-EntradaNoInstalada -Entrada (New-Entrada $exe) -Unidades @($raiz) | Should -BeFalse
+    }
+    It 'sin el exe ya no está' {
+        Test-EntradaNoInstalada -Entrada (New-Entrada (Join-Path $TestDrive 'falta.exe')) -Unidades @($raiz) | Should -BeTrue
+    }
+    It 'por la URI de Ubisoft o de Epic ya no está, aunque el lanzador siga: <Uri>' -ForEach @(
+        @{ Uri = 'uplay://launch/80/0' }
+        @{ Uri = 'com.epicgames.launcher://apps/Juego?action=launch&silent=true' }
+    ) {
+        Test-EntradaNoInstalada -Entrada (New-Entrada $exe $Uri) -Unidades @($raiz) | Should -BeTrue
+    }
+    It 'fuera de las unidades fijas no se mira (una de red puede tardar): no se sabe' {
+        Test-EntradaNoInstalada -Entrada (New-Entrada '\\servidor\juegos\falta.exe') -Unidades @($raiz) | Should -BeFalse
+        Test-EntradaNoInstalada -Entrada (New-Entrada (Join-Path $TestDrive 'falta.exe')) -Unidades @() | Should -BeFalse
+    }
+    It 'una app de la Store (explorer y shell:AppsFolder) no se da por desinstalada' {
+        $explorer = Join-Path $env:SystemRoot 'explorer.exe'
+        Test-EntradaNoInstalada -Entrada (New-Entrada $explorer 'shell:AppsFolder\App!App') -Unidades @([IO.Path]::GetPathRoot($explorer)) | Should -BeFalse
+    }
+}
+
 Describe 'Add-SteamShortcut' {
     BeforeEach {
         $vdf = Join-Path $TestDrive 'shortcuts.vdf'
@@ -206,6 +335,25 @@ Describe 'Invoke-CambiosShortcuts' {
         $r[0].Clave | Should -Be '0'
         $r[0].AppIdAnterior | Should -Be $script:IdMiJuego
         $root['shortcuts']['0']['Exe'] | Should -BeExactly '"C:\Juegos\Nuevo.exe"'
+    }
+    It 'un alta puede pedir que se reemplace solo ella (un juego que ha cambiado de exe)' {
+        $cambiado = New-Juego 'Mi Juego' 'D:\Juegos\Juego.exe'
+        $cambiado | Add-Member -NotePropertyName Reemplazar -NotePropertyValue $true
+        $r = @(Invoke-CambiosShortcuts -Root $root -Altas @($cambiado, $raymanDeLista))
+        $r.Ok | Should -Be @($true, $false)
+        $r[1].Motivo | Should -Be 'duplicado'
+        $r[0].AppIdAnterior | Should -Be $script:IdMiJuego
+        $root['shortcuts']['0']['Exe'] | Should -BeExactly '"D:\Juegos\Juego.exe"'
+        $root['shortcuts'].Count | Should -Be 2
+    }
+    It 'una baja quita la entrada exacta aunque haya otra del mismo nombre antes' {
+        # una vieja de 'Mi Juego' con otro exe detrás de las dos
+        [void](Invoke-CambiosShortcuts -Root $root -Altas @(New-Juego 'Viejo' 'C:\Viejo\Juego.exe'))
+        $root['shortcuts']['2']['AppName'] = 'Mi Juego'
+        $r = @(Invoke-CambiosShortcuts -Root $root -Bajas @(New-Juego 'Mi Juego' 'C:\Viejo\Juego.exe'))
+        $r[0].Ok | Should -BeTrue
+        @($root['shortcuts'].Keys) | Should -Be @('0', '1')
+        $root['shortcuts']['0']['Exe'] | Should -BeExactly '"C:\Juegos\Juego.exe"'
     }
     It 'un alta que falla no para a las demás' {
         $r = @(Invoke-CambiosShortcuts -Root $root -Altas @((New-Juego '' 'C:\sin-nombre.exe'), (New-Juego 'Bueno' 'C:\bueno.exe')))

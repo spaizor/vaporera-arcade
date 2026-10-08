@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 # Version de la aplicacion. Sale en el titulo de la ventana, junto al nombre de la cabecera, en
 # la primera linea del registro y en el historial del README.md: los cuatro tienen que ir
 # sincronizados. El XAML es una cadena literal y no interpola: la ventana la pone por codigo.
-$AppVersion = '1.1'
+$AppVersion = '1.2'
 
 $Raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TempDir = Join-Path $env:TEMP 'VaporeraArcade'
@@ -298,8 +298,8 @@ function Invoke-AnadirJuego {
 }
 
 # Quita de shortcuts.vdf el acceso directo que corresponde a $Juego (el mismo criterio que la
-# marca 'YA EN STEAM': nombre igual, o exe con las mismas opciones) y sus imagenes de
-# config\grid\. La confirmacion es cosa de quien llama.
+# marca 'YA EN STEAM': nombre igual, o exe con las mismas opciones; la mas exacta si casan
+# varias) y sus imagenes de config\grid\. La confirmacion es cosa de quien llama.
 function Invoke-QuitarJuego {
     param(
         [Parameter(Mandatory)]$Juego,
@@ -320,7 +320,7 @@ function Invoke-QuitarJuego {
     try {
         # se busca con Steam ya cerrado: al salir reescribe el fichero y las claves pueden cambiar
         $existentes = @(Get-ShortcutsExistentes -Ruta $Steam.Shortcuts)
-        $indice = Find-ShortcutDuplicado -Existentes $existentes -Nombre $Juego.Nombre -Exe $Juego.Exe -LaunchOptions $Juego.LaunchOptions
+        $indice = Find-ShortcutParaQuitar -Existentes $existentes -Nombre $Juego.Nombre -Exe $Juego.Exe -LaunchOptions $Juego.LaunchOptions
         if ($null -eq $indice) {
             Registrar "No hay ningún acceso directo de '$($Juego.Nombre)' en Steam. No se ha tocado nada."
             return [pscustomobject]@{ Ok = $false; Motivo = 'no-esta' }
@@ -437,9 +437,10 @@ function Invoke-QuitarJuegos {
     }
 }
 
-# Anade varios juegos. $Lote: objetos con Juego, Nombre y Rutas (las imagenes ya preparadas,
+# Anade varios juegos. $Lote: objetos con Juego, Nombre, Rutas (las imagenes ya preparadas,
 # como las de la vista previa; vacio si no se pudieron preparar: el juego se anade sin ellas,
-# que prepararlas ahora seria con Steam cerrado). Devuelve un resultado por juego
+# que prepararlas ahora seria con Steam cerrado) y Reemplazar (el de un juego que ha cambiado
+# de exe, que se actualiza aunque no se reemplacen todos). Devuelve un resultado por juego
 # (Invoke-CambiosShortcuts, con CaratulasOk), o $null si Steam no se cierra.
 function Invoke-AnadirJuegos {
     param(
@@ -453,7 +454,8 @@ function Invoke-AnadirJuegos {
     function Registrar($m) { if ($Log) { & $Log $m | Out-Null } else { Write-Registro $m } }
     $altas = @(foreach ($x in @($Lote)) {
         [pscustomobject]@{ Nombre = $x.Nombre; Exe = $x.Juego.Exe; StartDir = $x.Juego.StartDir
-                           Icono = $x.Juego.Icono; LaunchOptions = $x.Juego.LaunchOptions; Lote = $x }
+                           Icono = $x.Juego.Icono; LaunchOptions = $x.Juego.LaunchOptions
+                           Reemplazar = [bool]$x.Reemplazar; Lote = $x }
     })
     Registrar "=== Añadir $(Get-CuentaJuegos $altas.Count) ==="
 
@@ -1006,6 +1008,18 @@ $script:CerrarAlAcabar = ''
 $script:Elegidos = @()
 try { $script:Elegidos = @(Get-JuegosElegidos) }
 catch { Write-Registro "No he podido leer los juegos elegidos a mano: $($_.Exception.Message)" }
+# Los juegos de las tiendas vistos hasta la vez anterior (huellas de lib\Config.ps1), para marcar
+# los nuevos. Se lee al arrancar y no cambia en toda la sesion: un juego nuevo lo sigue siendo
+# hasta cerrar. $null la primera vez: no hay con que comparar y no se marca ninguno.
+# $script:VistosGuardados es lo que hay en config.json, para no escribirlo sin novedades.
+$script:VistosAntes = $null
+try { $script:VistosAntes = Get-JuegosVistos }
+catch { Write-Registro "No he podido leer los juegos ya vistos: $($_.Exception.Message)" }
+$script:VistosGuardados = $script:VistosAntes
+# Las entradas de shortcuts.vdf que no son de ningun juego de la lista (Update-Todos): salen al
+# final, como 'NO INSTALADO' o 'SOLO EN STEAM', y solo se pueden quitar
+$script:SinJuego = @()
+$script:UnidadesFijas = $null      # Get-UnidadesFijas, la primera vez que hace falta
 
 # Escribe en el registro y en la ventana SIN bombear mensajes. Es lo que se usa donde no se
 # puede dejar que WPF atienda nada en medio: el tic del reloj de las tareas y el cierre.
@@ -1064,10 +1078,11 @@ function Update-Botones {
         }
         return
     }
-    $ctl.BtnPreparar.IsEnabled = [bool]$script:Steam
+    $sel = $ctl.LstJuegos.SelectedItem
+    # lo que solo esta en Steam (no instalado o no detectado) no se prepara: solo se quita
+    $ctl.BtnPreparar.IsEnabled = ([bool]$script:Steam -and -not ($sel -and $sel.SoloEnSteam))
     $ctl.BtnAnadir.IsEnabled   = ([bool]$script:Steam -and $null -ne $script:Preparado)
     # solo tiene sentido con un juego que ya tenga acceso directo (la marca 'YA EN STEAM')
-    $sel = $ctl.LstJuegos.SelectedItem
     $ctl.BtnQuitar.IsEnabled   = ([bool]$script:Steam -and $null -ne $sel -and [bool]$sel.YaEnSteam)
     # los huecos de la vista previa abren la galeria, que necesita algo preparado
     foreach ($h in $HuecosVista.Values) { $ctl[$h.Boton].IsEnabled = ($null -ne $script:Preparado) }
@@ -1087,13 +1102,15 @@ function Update-Botones {
     # los marcados: la cuenta va en el boton y en la linea de encima
     $marc = @(Get-Marcados)
     $enSteam = @($marc | Where-Object { $_.YaEnSteam }).Count
-    $ctl.BtnAnadirMarcados.Content = $(if ($marc.Count) { "Añadir ($($marc.Count))" } else { 'Añadir marcados' })
+    # los que solo estan en Steam se pueden quitar, pero no anadir
+    $nAnadir = @($marc | Where-Object { -not $_.SoloEnSteam }).Count
+    $ctl.BtnAnadirMarcados.Content = $(if ($nAnadir) { "Añadir ($nAnadir)" } else { 'Añadir marcados' })
     $ctl.BtnQuitarMarcados.Content = $(if ($enSteam) { "Quitar ($enSteam)" } else { 'Quitar marcados' })
-    $ctl.BtnAnadirMarcados.IsEnabled = ([bool]$script:Steam -and $marc.Count -gt 0)
+    $ctl.BtnAnadirMarcados.IsEnabled = ([bool]$script:Steam -and $nAnadir -gt 0)
     $ctl.BtnQuitarMarcados.IsEnabled = ([bool]$script:Steam -and $enSteam -gt 0)
     $ctl.BtnDesmarcar.IsEnabled      = ($marc.Count -gt 0)
     # los del modo sencillo (Get-Marcados ya cuenta solo los juegos de las tiendas)
-    $ctl.BtnAnadirSencillo.Content = $(if ($marc.Count) { "Añadir marcados ($($marc.Count))" } else { 'Añadir marcados' })
+    $ctl.BtnAnadirSencillo.Content = $(if ($nAnadir) { "Añadir marcados ($nAnadir)" } else { 'Añadir marcados' })
     $ctl.BtnQuitarSencillo.Content = $(if ($enSteam) { "Quitar marcados ($enSteam)" } else { 'Quitar marcados' })
     $ctl.BtnAnadirSencillo.IsEnabled = $ctl.BtnAnadirMarcados.IsEnabled
     $ctl.BtnQuitarSencillo.IsEnabled = $ctl.BtnQuitarMarcados.IsEnabled
@@ -1117,10 +1134,13 @@ function Get-Marcados {
 }
 
 # Lo que sale en el modo sencillo: los juegos de las tiendas. Ni las apps de la Store, ni los
-# programas recientes, ni los elegidos con "Examinar .exe...": para eso esta el avanzado.
+# programas recientes, ni los elegidos con "Examinar .exe...": para eso esta el avanzado. De
+# lo que solo esta en Steam, los que ya no estan instalados (para quitarlos con el mando), pero
+# no el resto, que puede ser cualquier cosa anadida a mano.
 $FuentesJuego = @('Xbox / Game Pass', 'Epic Games', 'GOG', 'Ubisoft Connect')
 function Test-EsJuego {
     param($Juego)
+    if ($Juego.SoloEnSteam) { return ($Juego.Estado -eq 'no-instalado') }
     return ($FuentesJuego -contains [string]$Juego.Fuente)
 }
 
@@ -1314,27 +1334,126 @@ function Update-Lista {
     Update-Botones
 }
 
-# Rehace la lista y la marca 'YA EN STEAM' con el mismo criterio que usa la escritura del
-# VDF (Find-ShortcutDuplicado): nombre igual, o exe con las mismas opciones.
+# --- el estado de cada juego en Steam ----------------------------------
+# Estado de cada objeto de la lista, con su marca y su sitio en ella:
+#  'nuevo'          un juego de las tiendas que no estaba la vez anterior (y no esta en Steam)
+#  'cambiado'       en Steam con su nombre y otro exe: ya no arranca, se actualiza al anadirlo
+#  ''               sin mas
+#  'en-steam'       ya esta
+#  'no-instalado'   una entrada de Steam de un juego que ya no esta (Test-EntradaNoInstalada)
+#  'solo-en-steam'  una entrada de Steam que no es de nada de la lista (anadida a mano, con otro
+#                   programa, o de una app de la Store con su casilla quitada)
+# Los dos ultimos no son juegos detectados (SoloEnSteam): no se preparan ni se anaden.
+$OrdenEstado = @{ 'nuevo' = 0; 'cambiado' = 1; '' = 2; 'en-steam' = 3; 'no-instalado' = 4; 'solo-en-steam' = 5 }
+$MarcaEstado = @{ 'nuevo' = 'NUEVO'; 'cambiado' = 'CAMBIADO EN STEAM'; '' = ''; 'en-steam' = 'YA EN STEAM'
+                  'no-instalado' = 'NO INSTALADO'; 'solo-en-steam' = 'SOLO EN STEAM' }
+
+# Pone el estado a un objeto de la lista. $Entrada es la de shortcuts.vdf que le toca ($null si
+# no hay): de ella sale YaEnSteam y, en uno cambiado, el appid de sus caratulas viejas.
+function Set-EstadoJuego {
+    param($Juego, [string]$Estado, $Entrada)
+    $Juego.YaEnSteam = ($null -ne $Entrada)
+    $Juego | Add-Member -NotePropertyName Estado -NotePropertyValue $Estado -Force
+    $Juego | Add-Member -NotePropertyName Marca -NotePropertyValue $MarcaEstado[$Estado] -Force
+    $Juego | Add-Member -NotePropertyName EntradaSteam -NotePropertyValue $Entrada -Force
+    # la casilla de la lista; sin -Force, que no se pierda la de uno ya marcado
+    if ($null -eq $Juego.PSObject.Properties['Marcado']) {
+        $Juego | Add-Member -NotePropertyName Marcado -NotePropertyValue $false
+    }
+}
+
+# Si un juego de las tiendas no estaba la vez anterior (sus huellas, lib\Config.ps1)
+function Test-JuegoNuevo {
+    param($Juego)
+    if ($null -eq $script:VistosAntes -or -not ($FuentesJuego -contains [string]$Juego.Fuente)) { return $false }
+    return (-not $script:VistosAntes.ContainsKey((Get-HuellaJuego -Exe $Juego.Exe -Opciones ([string]$Juego.OpcionesOrigen))))
+}
+
+# Apunta en config.json los juegos de las tiendas de esta busqueda, junto a los de antes. Solo
+# escribe si hay alguno que no estuviera ya. Los que se desinstalan no se borran: son 16
+# caracteres cada uno, y asi una busqueda que falle un dia no los hace nuevos al siguiente.
+function Save-JuegosVistos {
+    $huellas = @(foreach ($j in @($script:Detectados)) {
+        if ($j -and ($FuentesJuego -contains [string]$j.Fuente)) { Get-HuellaJuego -Exe $j.Exe -Opciones ([string]$j.OpcionesOrigen) }
+    })
+    $faltan = @($huellas | Where-Object { $null -eq $script:VistosGuardados -or -not $script:VistosGuardados.ContainsKey($_) })
+    if ($null -ne $script:VistosGuardados -and -not $faltan.Count) { return }
+    $todas = @{}
+    if ($script:VistosGuardados) { foreach ($k in $script:VistosGuardados.Keys) { $todas[$k] = $true } }
+    foreach ($h in $huellas) { $todas[$h] = $true }
+    try {
+        Set-JuegosVistos -Huellas @($todas.Keys)
+        $script:VistosGuardados = $todas
+    } catch { Write-RegistroError -Contexto 'guardar los juegos vistos' -Fallo $_ }
+}
+
+# De que tienda parece una entrada de Steam que no sale en la busqueda: solo para la lista
+function Get-FuenteDeEntrada {
+    param($Entrada)
+    $opciones = [string]$Entrada.LaunchOptions
+    if ($opciones -like 'uplay://*') { return 'Ubisoft Connect' }
+    if ($opciones -like 'com.epicgames.launcher://*') { return 'Epic Games' }
+    if ($opciones -like 'shell:AppsFolder\*') { return 'App de la Store' }
+    if (([string]$Entrada.Exe) -like '*\gamelaunchhelper.exe') { return 'Xbox / Game Pass' }
+    return 'Acceso directo de Steam'
+}
+
+# Un objeto de la lista para una entrada de Steam sin juego: con su nombre, exe y opciones,
+# que es lo que necesita Invoke-QuitarJuego(s) para dar con ella
+function New-JuegoSoloEnSteam {
+    param($Entrada, [bool]$NoInstalado)
+    if ($NoInstalado) {
+        $estado = 'no-instalado'
+        $detalle = 'Está en Steam, pero el juego ya no está instalado (o se ha movido de sitio). Solo se puede quitar.'
+    } else {
+        $estado = 'solo-en-steam'
+        $detalle = 'Está en Steam, pero no sale en la búsqueda: lo añadiste a mano o con otro programa, o es de una casilla que está quitada (apps de la Store, programas recientes). Solo se puede quitar.'
+    }
+    $j = New-Juego -Nombre $Entrada.Nombre -Fuente (Get-FuenteDeEntrada $Entrada) -Exe $Entrada.Exe `
+             -LaunchOptions ([string]$Entrada.LaunchOptions) -Detalle $detalle
+    $j | Add-Member -NotePropertyName SoloEnSteam -NotePropertyValue $true
+    Set-EstadoJuego $j $estado $Entrada
+    return $j
+}
+
+# Rehace la lista con el estado de cada juego en Steam (Get-EstadoEnSteam: lo mismo que la
+# escritura del VDF toma por duplicado) y, al final, las entradas de Steam que no son de nadie
 function Update-Todos {
     $existentes = @()
     if ($script:Steam) { $existentes = @(Get-ShortcutsExistentes -Ruta $script:Steam.Shortcuts) }
     $script:VaporeraEnSteam = ''
     if ($script:Steam) { $script:VaporeraEnSteam = Get-EstadoVaporera $existentes }
-    foreach ($j in (@($script:Manuales) + @($script:Detectados))) {
-        $dup = Find-ShortcutDuplicado -Existentes $existentes -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions $j.LaunchOptions
-        $j.YaEnSteam = ($null -ne $dup)
-        $marca = if ($j.YaEnSteam) { 'YA EN STEAM' } else { '' }
-        $j | Add-Member -NotePropertyName Marca -NotePropertyValue $marca -Force
-        # la casilla de la lista; sin -Force, que no se pierda la de uno ya marcado
-        if ($null -eq $j.PSObject.Properties['Marcado']) {
-            $j | Add-Member -NotePropertyName Marcado -NotePropertyValue $false
-        }
+    $juegos = @(@($script:Manuales) + @($script:Detectados) | Where-Object { $_ })
+    foreach ($j in $juegos) {
+        $r = Get-EstadoEnSteam -Existentes $existentes -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions $j.LaunchOptions
+        $estado = $r.Estado
+        if (-not $estado -and (Test-JuegoNuevo $j)) { $estado = 'nuevo' }
+        Set-EstadoJuego $j $estado $r.Entrada
     }
+
+    # Las de Steam sin juego, rehechas cada vez; sus casillas no se pierden (como las de los demas)
+    $marcadas = @{}
+    foreach ($s in @($script:SinJuego)) { if ($s.Marcado) { $marcadas["$($s.Nombre)|$($s.Exe)|$($s.LaunchOptions)"] = $true } }
+    $sinJuego = @(Get-EntradasSinJuego -Existentes $existentes -Juegos $juegos -Excluir @(Get-JuegoVaporera))
+    if ($sinJuego.Count -and $null -eq $script:UnidadesFijas) { $script:UnidadesFijas = @(Get-UnidadesFijas) }
+    $script:SinJuego = @(foreach ($e in $sinJuego) {
+        $s = New-JuegoSoloEnSteam -Entrada $e -NoInstalado (Test-EntradaNoInstalada -Entrada $e -Unidades $script:UnidadesFijas)
+        if ($marcadas.ContainsKey("$($s.Nombre)|$($s.Exe)|$($s.LaunchOptions)")) { $s.Marcado = $true }
+        $s
+    })
+
     # los de 'Examinar' van delante: el usuario los acaba de elegir y no salen de la busqueda
     $script:Todos = @($script:Manuales) +
-                    @($script:Detectados | Sort-Object @{Expression={$_.YaEnSteam}}, @{Expression={$_.Fuente}}, @{Expression={$_.Nombre}})
+                    @(@($script:Detectados) + @($script:SinJuego) | Where-Object { $_ } |
+                      Sort-Object @{Expression={ $OrdenEstado[[string]$_.Estado] }}, @{Expression={$_.Fuente}}, @{Expression={$_.Nombre}})
     Update-Lista
+}
+
+# "3 nuevos" o "1 nuevo": $Uno y $Varios con {0} para el numero
+function Get-Cuenta {
+    param([int]$N, [string]$Uno, [string]$Varios)
+    if ($N -eq 1) { return ($Uno -f $N) }
+    return ($Varios -f $N)
 }
 
 function Update-Deteccion {
@@ -1354,10 +1473,20 @@ function Update-Deteccion {
         }
     }
     Update-Todos
-    $texto = "Detectados {0} títulos ({1} ya están en Steam)." -f
-                @($script:Detectados).Count, (@($script:Detectados | Where-Object YaEnSteam)).Count
+    Save-JuegosVistos
+    $det = @($script:Detectados)
+    $texto = "Detectados {0} títulos ({1} ya están en Steam)." -f $det.Count, (@($det | Where-Object YaEnSteam)).Count
     if (@($script:Manuales).Count) { $texto += " Y {0} elegidos a mano." -f @($script:Manuales).Count }
     Add-Log $texto
+    # lo que pide atencion, en una linea: en el modo sencillo es la que se ve
+    $avisos = @()
+    $n = @($det | Where-Object { $_.Estado -eq 'nuevo' }).Count
+    if ($n) { $avisos += Get-Cuenta $n '{0} juego nuevo desde la última vez' '{0} juegos nuevos desde la última vez' }
+    $n = @($det | Where-Object { $_.Estado -eq 'cambiado' }).Count
+    if ($n) { $avisos += Get-Cuenta $n '{0} cambiado de sitio (márcalo y añádelo para arreglarlo en Steam)' '{0} cambiados de sitio (márcalos y añádelos para arreglarlos en Steam)' }
+    $n = @($script:SinJuego | Where-Object { $_.Estado -eq 'no-instalado' }).Count
+    if ($n) { $avisos += Get-Cuenta $n '{0} en Steam que ya no está instalado' '{0} en Steam que ya no están instalados' }
+    if ($avisos.Count) { Add-Log (($avisos -join '; ') + '.') }
   } catch {
     Add-Log "ERROR detectando juegos: $($_.Exception.Message)"
     Write-RegistroError -Contexto 'detectar juegos' -Fallo $_
@@ -1598,12 +1727,50 @@ function Show-Ajustes {
     }
 }
 
+# --- las casillas y el origen, como se dejaron ---------------------------
+# Se guardan en config.json al cambiarlos y se ponen al arrancar, antes de enganchar los
+# eventos (si no, ponerlos los volveria a guardar). "Reemplazar si ya existe" no se recuerda:
+# marcada sin darse cuenta, la siguiente vez reemplazaria juegos sin avisar.
+$Preferencias = @(
+    @{ Clave = 'IncluirApps';      Casilla = 'ChkApps' }
+    @{ Clave = 'IncluirRecientes'; Casilla = 'ChkRecientes' }
+    @{ Clave = 'BigPicture';       Casilla = 'ChkBigPicture' }
+)
+
+function Save-Preferencia {
+    param([string]$Clave, $Valor)
+    try { Set-ConfigValor -Nombre $Clave -Valor $Valor }
+    catch { Write-RegistroError -Contexto "guardar $Clave" -Fallo $_ }
+}
+
+function Restore-Preferencias {
+    try { $cfg = Get-Config }
+    catch { Write-Registro "No he podido leer las casillas guardadas: $($_.Exception.Message)"; return }
+    foreach ($p in $Preferencias) {
+        if ($cfg.ContainsKey($p.Clave)) { $ctl[$p.Casilla].IsChecked = ($cfg[$p.Clave] -eq $true) }
+    }
+    $origen = [string]$cfg['OrigenArte']
+    if ($origen) {
+        foreach ($item in $ctl.CmbOrigenArte.Items) {
+            if ([string]$item.Tag -eq $origen) { $ctl.CmbOrigenArte.SelectedItem = $item }
+        }
+    }
+}
+Restore-Preferencias
+
 # --- eventos ---------------------------------------------------------
 $ctl.BtnAjustes.Add_Click({ Invoke-Ocupado { Show-Ajustes } })
 $ctl.TxtBuscar.Add_TextChanged({ Update-Lista })
 $ctl.BtnRefrescar.Add_Click({ Invoke-Ocupado { Update-Deteccion } })
-$ctl.ChkRecientes.Add_Click({ Invoke-Ocupado { Update-Deteccion } })
-$ctl.ChkApps.Add_Click({ Invoke-Ocupado { Update-Deteccion } })
+$ctl.ChkRecientes.Add_Click({
+    Save-Preferencia 'IncluirRecientes' ([bool]$ctl.ChkRecientes.IsChecked)
+    Invoke-Ocupado { Update-Deteccion }
+})
+$ctl.ChkApps.Add_Click({
+    Save-Preferencia 'IncluirApps' ([bool]$ctl.ChkApps.IsChecked)
+    Invoke-Ocupado { Update-Deteccion }
+})
+$ctl.ChkBigPicture.Add_Click({ Save-Preferencia 'BigPicture' ([bool]$ctl.ChkBigPicture.IsChecked) })
 
 $ctl.LstJuegos.Add_SelectionChanged({
     $j = $ctl.LstJuegos.SelectedItem
@@ -1616,7 +1783,13 @@ $ctl.LstJuegos.Add_SelectionChanged({
         $ctl.TxtNombre.Text   = $j.Nombre
         $ctl.TxtExe.Text      = $j.Exe
         $ctl.TxtOpciones.Text = $j.LaunchOptions
-        $ctl.TxtDetalle.Text  = $j.Detalle + $(if ($j.YaEnSteam) { "  |  OJO: ya hay un acceso directo con este nombre." } else { '' })
+        $extra = ''
+        switch ($j.Estado) {
+            'en-steam' { $extra = '  |  OJO: ya hay un acceso directo con este nombre.' }
+            'cambiado' { $extra = "  |  En Steam está con otra ruta ($($j.EntradaSteam.Exe)) y ya no arranca: al añadirlo se actualiza, sin marcar «Reemplazar si ya existe»." }
+            'nuevo'    { $extra = '  |  Nuevo desde la última vez que abriste la Vaporera.' }
+        }
+        $ctl.TxtDetalle.Text  = $j.Detalle + $extra
     } finally { $script:CambiandoJuego = $false }
     Clear-Preview
 })
@@ -1649,7 +1822,10 @@ $ctl.TxtNombre.Add_TextChanged({
 
 $ctl.BtnOlvidar.Add_Click({ Invoke-Ocupado { Invoke-Olvidar } })
 # el elegido a mano puede no valer con el origen nuevo: la linea de encima lo dice
-$ctl.CmbOrigenArte.Add_SelectionChanged({ Update-Elegido })
+$ctl.CmbOrigenArte.Add_SelectionChanged({
+    Update-Elegido
+    Save-Preferencia 'OrigenArte' (Get-OrigenArte)
+})
 
 # --- trabajo en segundo plano ------------------------------------------
 # Las tareas de lib\Tareas.ps1 corren en otro runspace; este reloj, en el hilo de la UI, pasa
@@ -1716,6 +1892,7 @@ function Start-Preparar {
         } else {
             $j = $ctl.LstJuegos.SelectedItem
             if (-not $j) { Add-Log 'Elige un juego de la lista.'; return }
+            if ($j.SoloEnSteam) { Add-Log "'$($j.Nombre)' solo está en Steam: se puede quitar, pero no añadir."; return }
             $nombre = $ctl.TxtNombre.Text.Trim()
             if (-not $nombre) { Add-Log 'El nombre no puede estar vacío.'; return }
             $j.LaunchOptions = $ctl.TxtOpciones.Text
@@ -2361,15 +2538,72 @@ foreach ($k in $HuecosVista.Keys) {
     $ctl[$HuecosVista[$k].Boton].Add_Click({ param($s, $e) Show-Galeria -Ranura ([string]$s.Tag) })
 }
 
+# --- los juegos que han cambiado de exe ('CAMBIADO EN STEAM') ---------------
+# Su entrada de Steam tiene su nombre y otro exe, y ya no lo arranca. Al anadirlos se
+# reemplaza sin necesidad de "Reemplazar si ya existe" y lo suyo pasa a la entrada nueva.
+
+# Las imagenes que ya tenia en config\grid\ la entrada vieja, copiadas a %TEMP% con los nombres
+# del appid nuevo: al actualizarlo con "Añadir marcados" se conservan (tambien las elegidas en
+# la galeria o puestas a mano en Steam) sin buscar ni descargar nada. $null si le falta alguna
+# de las imprescindibles: entonces se preparan como las de cualquier juego.
+function Copy-CaratulasEntrada {
+    param([uint32]$AppIdViejo, [uint32]$AppIdNuevo)
+    $grid = $script:Steam.GridDir
+    $sufijos = [ordered]@{ p = 'p'; cap = ''; hero = '_hero'; logo = '_logo'; icon = '_icon' }
+    $origen = @{}
+    foreach ($k in $sufijos.Keys) {
+        foreach ($ext in @('png', 'jpg', 'jpeg')) {
+            $f = Join-Path $grid "$AppIdViejo$($sufijos[$k]).$ext"
+            if (Test-Path -LiteralPath $f) { $origen[$k] = $f; break }
+        }
+    }
+    foreach ($k in $ImagenesClave.Keys) { if (-not $origen.ContainsKey($k)) { return $null } }
+    # la posicion del logo sobre la cabecera, si se movio en Steam
+    $json = Join-Path $grid "$AppIdViejo.json"
+    if (Test-Path -LiteralPath $json) { $origen['json'] = $json }
+
+    $dir = Join-Path $TempDir ('{0}-{1}' -f $AppIdNuevo, (Get-Date -Format 'HHmmssfff'))
+    [void](New-Item -ItemType Directory -Path $dir -Force)
+    $rutas = @{}
+    foreach ($k in $origen.Keys) {
+        $hoja = (Split-Path $origen[$k] -Leaf) -replace "^$AppIdViejo", "$AppIdNuevo"
+        $rutas[$k] = Join-Path $dir $hoja
+        Copy-Item -LiteralPath $origen[$k] -Destination $rutas[$k] -Force
+    }
+    return $rutas
+}
+
+# El juego elegido a mano en la galeria se guardo con el exe viejo: pasa al nuevo para que no
+# se pierda. Solo si el nuevo no tiene ya uno.
+function Move-ElegidoCambiado {
+    param($Juego)
+    $e = $Juego.EntradaSteam
+    if (-not $e -or (Get-ElegidoGuardado $Juego)) { return }
+    $viejo = Find-JuegoElegido -Lista $script:Elegidos -Exe $e.Exe -Opciones ([string]$e.LaunchOptions)
+    if (-not $viejo) { return }
+    try {
+        [void](Set-JuegoElegido -Exe $Juego.Exe -Opciones ([string]$Juego.OpcionesOrigen) `
+                   -Fuente $viejo.Fuente -Id $viejo.Id -Titulo $viejo.Titulo)
+        $script:Elegidos = @(Remove-JuegoElegido -Exe $e.Exe -Opciones ([string]$e.LaunchOptions))
+        Add-Log "  El juego elegido a mano para las carátulas de '$($Juego.Nombre)' («$($viejo.Titulo)») sigue guardado con la ruta nueva."
+    } catch {
+        Write-RegistroError -Contexto 'pasar el juego elegido a la ruta nueva' -Fallo $_
+    }
+}
+
 function Invoke-Anadir {
     if (-not $script:Preparado) { return }
     if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
     try {
         $p = $script:Preparado
         $p.Juego.LaunchOptions = $ctl.TxtOpciones.Text
+        # el que ha cambiado de exe se actualiza: su entrada vieja ya no arranca
+        $cambiado = ($p.Juego.Estado -eq 'cambiado')
+        if ($cambiado) { Add-Log "'$($p.Nombre)' está en Steam con otra ruta: lo actualizo." }
         $r = Invoke-AnadirJuego -Juego $p.Juego -Nombre $p.Nombre -Steam $script:Steam `
-                -Reemplazar:([bool]$ctl.ChkReemplazar.IsChecked) -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) `
+                -Reemplazar:([bool]$ctl.ChkReemplazar.IsChecked -or $cambiado) -AbrirBigPicture:([bool]$ctl.ChkBigPicture.IsChecked) `
                 -CaratulasListas $p.Rutas -Log $LogGui
+        if ($r.Ok -and $cambiado) { Move-ElegidoCambiado $p.Juego }
         # si no ha ido bien, $script:Preparado sigue puesto y Update-Botones deja el boton vivo
         if ($r.Ok) { Clear-Preview; Update-Deteccion }
         # anadido, Steam se ha reabierto siempre: si es en Big Picture, la Vaporera se cierra
@@ -2387,11 +2621,13 @@ function Invoke-Quitar {
     if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
     # El nombre que sale en la pregunta es el del acceso directo, no el detectado: si se anadio
     # con otro nombre (casa por el exe), es ese el que el usuario reconoce en su biblioteca.
-    $dup = Test-ShortcutDuplicado -RutaVdf $script:Steam.Shortcuts -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions $j.LaunchOptions
-    $entrada = Get-ShortcutsExistentes -Ruta $script:Steam.Shortcuts | Where-Object { $_.Indice -eq $dup } | Select-Object -First 1
+    $existentes = @(Get-ShortcutsExistentes -Ruta $script:Steam.Shortcuts)
+    $dup = Find-ShortcutParaQuitar -Existentes $existentes -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions $j.LaunchOptions
+    $entrada = $existentes | Where-Object { $_.Indice -eq $dup } | Select-Object -First 1
     $nombre = if ($entrada) { $entrada.Nombre } else { $j.Nombre }
+    $queda = $(if ($j.SoloEnSteam) { 'Lo que tengas instalado no se toca.' } else { 'El juego no se desinstala.' })
     $texto = "¿Quitar «$nombre» de la biblioteca de Steam?`r`n`r`n" +
-             "Se borran el acceso directo y sus carátulas. El juego no se desinstala.`r`n" +
+             "Se borran el acceso directo y sus carátulas. $queda`r`n" +
              "Si Steam está abierto se cerrará un momento; antes se hace copia de shortcuts.vdf."
     $resp = [Windows.MessageBox]::Show($win, $texto, 'Quitar de Steam', 'YesNo', 'Question', 'No')
     if ($resp -ne 'Yes') { return }
@@ -2468,11 +2704,13 @@ function Get-ListaNombres {
 
 function Start-AnadirMarcados {
     if ($script:Ocupado) { return }
-    $marcados = @(Get-Marcados)
+    # lo que solo esta en Steam se puede quitar, pero no anadir
+    $marcados = @(Get-Marcados | Where-Object { -not $_.SoloEnSteam })
     if (-not $marcados.Count) { return }
     if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
     $reemplazar = [bool]$ctl.ChkReemplazar.IsChecked
-    $yaEstan = @($marcados | Where-Object { $_.YaEnSteam }).Count
+    $yaEstan = @($marcados | Where-Object { $_.YaEnSteam -and $_.Estado -ne 'cambiado' }).Count
+    $cambiados = @($marcados | Where-Object { $_.Estado -eq 'cambiado' }).Count
     $texto = "¿Añadir $(Get-CuentaJuegos $marcados.Count) a Steam?`r`n`r`n$(Get-ListaNombres $marcados)`r`n`r`n" +
              "Primero se preparan las carátulas de cada uno (se puede cancelar). Después Steam se " +
              "cerrará una sola vez para añadirlos todos; antes se hace copia de shortcuts.vdf."
@@ -2481,6 +2719,13 @@ function Start-AnadirMarcados {
     } elseif ($yaEstan) {
         $texto += "`r`n`r`n$yaEstan ya están en Steam y " + $(if ($reemplazar) { 'se reemplazarán.' } else { 'se saltarán (marca «Reemplazar si ya existe» para sustituirlos).' })
     }
+    if ($cambiados -eq 1) {
+        $texto += "`r`n`r`n1 está en Steam con otra ruta y se actualizará, con las carátulas que ya tenía."
+    } elseif ($cambiados) {
+        $texto += "`r`n`r`n$cambiados están en Steam con otra ruta y se actualizarán, con las carátulas que ya tenían."
+    }
+    $soloSteam = @(Get-Marcados).Count - $marcados.Count
+    if ($soloSteam) { $texto += "`r`n`r`nLos $soloSteam marcados que solo están en Steam no se añaden (se pueden quitar)." }
     $resp = [Windows.MessageBox]::Show($win, $texto, 'Añadir a Steam', 'YesNo', 'Question', 'No')
     if ($resp -ne 'Yes') { return }
 
@@ -2502,14 +2747,24 @@ function Start-AnadirMarcados {
                 if ($t) { $nombre = $t }
                 $juego.LaunchOptions = $ctl.TxtOpciones.Text
             }
-            $x = [pscustomobject]@{ Item = $j; Juego = $juego; Nombre = $nombre; Rutas = $null }
+            # el que ha cambiado de exe se actualiza aunque no se reemplacen todos
+            $cambiado = ($j.Estado -eq 'cambiado')
+            $x = [pscustomobject]@{ Item = $j; Juego = $juego; Nombre = $nombre; Rutas = $null; Reemplazar = $cambiado }
             $p = $script:Preparado
+            $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $juego.Exe + '"') -AppName $nombre
+            $viejas = $null
+            if ($cambiado -and $j.EntradaSteam -and -not ($p -and [object]::ReferenceEquals($p.Juego, $j))) {
+                try { $viejas = Copy-CaratulasEntrada -AppIdViejo $j.EntradaSteam.AppId -AppIdNuevo $appId }
+                catch { Write-RegistroError -Contexto 'copiar las carátulas de un juego cambiado' -Fallo $_ }
+            }
             if ($p -and [object]::ReferenceEquals($p.Juego, $j) -and $p.Nombre -eq $nombre) {
                 $x.Rutas = $p.Rutas
-            } elseif ($j.YaEnSteam -and -not $reemplazar) {
+            } elseif ($viejas) {
+                $x.Rutas = $viejas
+                Add-Log "  '$nombre' está en Steam con otra ruta: se actualiza con las carátulas que ya tenía."
+            } elseif ($j.YaEnSteam -and -not $cambiado -and -not $reemplazar) {
                 # se va a saltar (Invoke-AnadirJuegos lo vuelve a mirar): no hace falta prepararlo
             } else {
-                $appId = Get-SteamShortcutAppId -ExeQuoted ('"' + $juego.Exe + '"') -AppName $nombre
                 # el juego elegido a mano que tenga guardado, igual que en "1. Preparar"
                 $guardado = Get-ElegidoParaPreparar -Juego $j -OrigenArte $origenArte
                 $ids = Get-IdsElegido $guardado.Elegido
@@ -2604,6 +2859,7 @@ function Invoke-FinAnadirMarcados {
         # se desmarcan los que ya estan en Steam; los que han fallado siguen marcados
         foreach ($r in $res) {
             if ($r.Ok -or $r.Motivo -eq 'duplicado' -or $r.Motivo -eq 'repetido') { $r.Elemento.Lote.Item.Marcado = $false }
+            if ($r.Ok -and $r.Elemento.Lote.Reemplazar) { Move-ElegidoCambiado $r.Elemento.Lote.Item }
         }
         $hechos = @($res | Where-Object { $_.Ok })
         if ($hechos.Count) { Clear-Preview; Update-Deteccion }
@@ -2635,7 +2891,7 @@ function Invoke-QuitarMarcados {
     if (-not $marcados.Count) { return }
     if (-not $script:Steam) { Add-Log (Get-SteamMotivo); return }
     $texto = "¿Quitar $(Get-CuentaJuegos $marcados.Count) de la biblioteca de Steam?`r`n`r`n$(Get-ListaNombres $marcados)`r`n`r`n" +
-             "Se borran sus accesos directos y sus carátulas. Los juegos no se desinstalan.`r`n" +
+             "Se borran sus accesos directos y sus carátulas. Lo que tengas instalado no se desinstala.`r`n" +
              "Si Steam está abierto se cerrará un momento, una sola vez; antes se hace copia de shortcuts.vdf."
     $otros = @(Get-Marcados).Count - $marcados.Count
     if ($otros) { $texto += "`r`n`r`nLos $otros marcados que no están en Steam no se tocan." }

@@ -40,6 +40,11 @@ acceso directo, de modo que el juego aparece en Big Picture como uno más.
   sola vez.
 - **Marca los juegos que ya están en Steam** y los muestra al final de la lista. Se consideran
   repetidos los que tengan el mismo nombre, o el mismo ejecutable con las mismas opciones.
+- **Te dice qué hay que mirar** (ver *Lo que dice la lista*): los juegos **nuevos** desde la
+  última vez, los que están en Steam con una ruta que **ya no funciona** (se arreglan
+  añadiéndolos otra vez, con sus carátulas) y lo que sigue en Steam aunque **ya no esté
+  instalado**, para quitarlo.
+- **Recuerda las casillas** y el origen de las carátulas para la próxima vez.
 - **Copia de seguridad** de `shortcuts.vdf` antes de cada escritura.
 - **Reabre Steam** al terminar, en Big Picture si lo prefieres.
 - **Se maneja con el teclado o con un mando** de Xbox (o compatible), sin ratón.
@@ -142,7 +147,8 @@ vez, con una sola copia de seguridad. Al añadir, primero se preparan las carát
 en segundo plano (se cancela con el mismo botón que *1. Preparar carátulas*); el juego que
 tengas en la vista previa usa las imágenes que hayas elegido en ella, y el seleccionado, el
 nombre y las opciones que hayas escrito. Los que tengan un juego elegido a mano se preparan
-con él. Los que ya están en Steam se saltan, salvo que marques *Reemplazar si ya existe*. Si
+con él. Los que ya están en Steam se saltan, salvo que marques *Reemplazar si ya existe*; los
+**CAMBIADO EN STEAM** se actualizan siempre, con las carátulas que ya tenían. Si
 uno falla, los demás siguen, y al final el registro muestra un resumen. Marcar un juego no lo
 selecciona.
 
@@ -153,6 +159,27 @@ Casillas de la parte inferior:
   Si algo falla, se queda abierta para que veas qué ha pasado.
 - **Reemplazar si ya existe:** sobrescribe el acceso directo si ya había uno con el mismo
   nombre o el mismo ejecutable.
+
+La aplicación recuerda para la próxima vez *Reabrir Steam en Big Picture*, *Apps de la Store*,
+*Programas recientes* y el *Origen de las carátulas*. *Reemplazar si ya existe* no: se queda
+siempre desmarcada al abrir, para que no reemplace juegos sin que te des cuenta.
+
+### Lo que dice la lista
+
+Debajo del nombre de cada juego sale de dónde es y, si hace falta, una marca. Los que piden
+algo van arriba:
+
+| Marca | Qué quiere decir | Qué hacer |
+|---|---|---|
+| **NUEVO** | Un juego de Xbox / Game Pass, Epic, GOG o Ubisoft que no estaba la última vez que abriste la aplicación. La marca dura hasta que la cierras. | Añadirlo, si quieres. |
+| **CAMBIADO EN STEAM** | Está en Steam con su nombre, pero con otro ejecutable: el juego se ha movido de carpeta o de disco, o una actualización le ha cambiado el `.exe`. El acceso directo de Steam ya no lo arranca. | Añadirlo otra vez, sin marcar *Reemplazar si ya existe*: se actualiza en su sitio. Con *Añadir marcados* conserva las carátulas que ya tenía (también las elegidas a mano), sin descargar nada. |
+| **YA EN STEAM** | Ya está. | Nada, o quitarlo. |
+| **NO INSTALADO** | Está en Steam, pero el juego ya no está: su ejecutable no existe, o es de Epic o de Ubisoft y no sale en la búsqueda. | Quitarlo (solo se puede quitar). |
+| **SOLO EN STEAM** | Está en Steam, pero no sale en la búsqueda: lo añadiste a mano o con otro programa, o es de una casilla quitada (*Apps de la Store*, *Programas recientes*). | Quitarlo, si ya no lo quieres (solo se puede quitar). |
+
+Para saber qué juegos son nuevos, la aplicación guarda en `config.json` una **huella** de cada
+juego (16 letras y números calculados a partir de su ejecutable), no su ruta ni su nombre. La
+primera vez que se abre no hay con qué comparar y no sale ninguno como nuevo.
 
 ### Con el teclado o con el mando, desde Big Picture
 
@@ -196,8 +223,10 @@ modo que usaste.
 
 ![El modo sencillo: la lista de juegos en grande, con sus casillas, y debajo los botones «Añadir marcados» y «Quitar marcados»](docs/captura-sencillo.png)
 
-- **Solo salen los juegos** de Xbox / Game Pass, Epic, GOG y Ubisoft. Las apps de la Store,
-  los programas recientes y los elegidos con *Examinar .exe…* se quedan en el modo avanzado.
+- **Solo salen los juegos** de Xbox / Game Pass, Epic, GOG y Ubisoft, los nuevos arriba, y
+  los que están en Steam pero ya no están instalados (**NO INSTALADO**), para quitarlos con el
+  mando. Las apps de la Store, los programas recientes, los elegidos con *Examinar .exe…* y lo
+  que sale como **SOLO EN STEAM** se quedan en el modo avanzado.
 - **Usa lo que tengas puesto en el modo avanzado**: el origen de las carátulas, el juego
   elegido a mano de cada uno, *Reabrir Steam en Big Picture* y *Reemplazar si ya existe*.
 - **Al terminar de añadir, la aplicación se cierra sola** (también con *Añadir Vaporera a
@@ -281,8 +310,11 @@ Son limitaciones de Steam y de cada plataforma, no de esta aplicación:
   `gamelaunchhelper.exe` arranca el juego y termina, así que Steam deja de seguir el proceso.
 - **Apps de la Microsoft Store:** ocurre lo mismo. Además, la ventana puede quedar detrás de
   Big Picture.
-- **Si cambia el ejecutable de un juego, cambia su identificador en Steam** y las carátulas
-  dejan de aparecer. Vuelve a añadirlo con la casilla *Reemplazar si ya existe* marcada.
+- **Si cambia el ejecutable de un juego, cambia su identificador en Steam** y el acceso
+  directo deja de funcionar. La lista lo marca como **CAMBIADO EN STEAM**: añádelo otra vez y
+  se actualiza. Si en Steam le habías cambiado el nombre, no se puede saber que es el mismo: el
+  acceso directo viejo sale aparte (**NO INSTALADO** o **SOLO EN STEAM**) y el juego, como uno
+  sin añadir.
 - **Steam tiene que cerrarse** para modificar `shortcuts.vdf`; si no, lo sobrescribe al salir.
   La aplicación lo cierra sola y espera hasta 40 segundos. Si no se cierra, cancela la operación
   sin tocar nada.
@@ -317,7 +349,9 @@ que después pulses una imagen de la vista previa para elegir otra.
   al que le hayas elegido a mano de qué juego son las carátulas, la **ruta de su ejecutable**
   (que puede incluir tu nombre de usuario de Windows), sus opciones de lanzamiento y el juego
   elegido: si es de la Store o de SteamGridDB, su identificador y su título. Cada uno se borra
-  con el botón **Olvidar**. Y si la usaste por última vez en el modo sencillo.
+  con el botón **Olvidar**. Además, si la usaste por última vez en el modo sencillo, cómo
+  dejaste las casillas y el origen de las carátulas, y una huella de cada juego de las tiendas
+  que ha visto (16 caracteres sacados de su ejecutable, sin la ruta), para marcar los nuevos.
 - `%LOCALAPPDATA%\VaporeraArcade\vaporera-arcade.log`: el registro de actividad. Contiene
   **rutas completas** (que incluyen tu nombre de usuario de Windows), los nombres de los juegos
   que tienes instalados y el **identificador de tu perfil de Steam**. Míralo antes de pegarlo
@@ -346,6 +380,9 @@ Elige en la lista un juego marcado como **YA EN STEAM** y pulsa **Quitar de Stea
 confirmar, la aplicación cierra Steam, hace una copia de seguridad de `shortcuts.vdf`, quita el
 acceso directo y borra sus carátulas de `config\grid\`. El juego no se desinstala. Steam se
 vuelve a abrir solo si estaba abierto.
+
+Lo mismo vale para lo que sale como **NO INSTALADO** o **SOLO EN STEAM**: así se limpian los
+accesos directos de juegos que ya has desinstalado, aunque no los añadiera esta aplicación.
 
 También puedes quitarlo desde Steam (clic derecho sobre el juego → *Administrar* y la opción
 para quitarlo de la biblioteca), pero entonces sus carátulas se quedan en `config\grid\`. O,
@@ -404,7 +441,8 @@ junto al nombre en la cabecera de la ventana.
 
 El repositorio tiene una carpeta `tests\` (no va en el ZIP de las releases) con tests de
 [Pester 5](https://pester.dev) para lo delicado: la lectura y escritura de `shortcuts.vdf`
-byte a byte, el cálculo del appid, los duplicados, añadir y quitar accesos directos, la
+byte a byte, el cálculo del appid, los duplicados, el estado de cada juego frente a lo que hay
+en Steam, añadir y quitar accesos directos, la
 limpieza de carátulas, la comparación de títulos, los ajustes de `config.json`, el trabajo en
 segundo plano y cuándo cuenta una pulsación del mando. No tocan Steam ni tus ajustes: trabajan sobre ficheros temporales. Se lanzan
 desde Windows PowerShell 5.1, en la carpeta del repositorio:
@@ -418,6 +456,10 @@ instalar la versión 5.
 
 ## Historial de versiones
 
+- **1.2** (08-10-2026): la lista marca los juegos nuevos desde la última vez, los que han
+  cambiado de ruta y ya no arrancan desde Steam (se arreglan añadiéndolos otra vez, con sus
+  carátulas) y los accesos directos de juegos que ya no están instalados, para quitarlos. Se
+  recuerdan las casillas y el origen de las carátulas.
 - **1.1** (04-10-2026): se maneja con el teclado o con un mando de Xbox (o compatible), y
   tiene un modo sencillo con solo los juegos para usarla desde Big Picture. Se puede añadir a
   sí misma a Steam, y el botón «Big Picture» vuelve a Steam y la cierra. Cuando Steam se

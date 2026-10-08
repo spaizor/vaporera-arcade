@@ -30,6 +30,10 @@ so the game shows up in Big Picture like any other.
 - **Marks the games already in Steam**, backs up `shortcuts.vdf` before every write and
   restarts Steam when done (optionally in Big Picture).
 - **Removes** a game it added, together with its artwork.
+- **Tells you what needs a look**: games that are **new** since last time, games whose Steam
+  shortcut points to an old path (added again, they are fixed in place and keep their
+  artwork), and shortcuts still in Steam for games that are **no longer installed**.
+- **Remembers the checkboxes** and the artwork source for next time.
 - **Works with the keyboard or an Xbox (or compatible) controller**, no mouse needed.
 - **Simple mode**: just the games, in large print, to tick them and add or remove them with
   the controller.
@@ -89,6 +93,24 @@ To add or remove several games at once, tick their boxes in the list and click *
 adding, the artwork of each game is prepared first (the prepare button becomes **Cancelar**,
 "cancel"); games already in Steam are skipped. The log ends with a summary.
 
+Below each game's name, the list shows where it comes from and, when it matters, a tag. The
+ones that need something go first:
+
+| Tag | Meaning | What to do |
+|---|---|---|
+| **NUEVO** | New: a game from Xbox / Game Pass, Epic, GOG or Ubisoft that wasn't there the last time you opened the app. | Add it, if you want. |
+| **CAMBIADO EN STEAM** | Changed: it's in Steam under its name but with another executable (the game was moved, or an update renamed its `.exe`), so the Steam shortcut no longer starts it. | Add it again, without *Reemplazar si ya existe*: the shortcut is updated in place. With *Añadir (N)* it keeps the artwork it had. |
+| **YA EN STEAM** | Already in Steam. | Nothing, or remove it. |
+| **NO INSTALADO** | Not installed: in Steam, but the game is gone. | Remove it (that's all it allows). |
+| **SOLO EN STEAM** | Only in Steam: not found by the search (added by hand or by another tool, or from an unticked box). | Remove it, if you no longer want it. |
+
+To spot new games, `config.json` keeps a 16-character fingerprint of each game's executable,
+not its path or name. Nothing is tagged as new the first time the app runs.
+
+The app remembers *Reabrir Steam en Big Picture*, *Apps de la Store*, *Programas recientes* and
+the artwork source. *Reemplazar si ya existe* always starts unticked, so it never replaces
+games by surprise.
+
 ### Keyboard, controller and Big Picture
 
 Everything works without a mouse. Keyboard: Tab (and Shift+Tab) moves between controls, the
@@ -110,7 +132,8 @@ Picture and closes the app, like quitting a game.
 **Modo sencillo** ("simple mode"), top right, leaves only the games list in large print and
 two buttons, **Añadir marcados** ("add ticked") and **Quitar marcados** ("remove ticked").
 Tick games with **A** or **X** (Enter or Space on the keyboard) and press *Añadir marcados*.
-Only games from Xbox / Game Pass, Epic, GOG and Ubisoft are shown, and everything else (artwork
+Only games from Xbox / Game Pass, Epic, GOG and Ubisoft are shown (new ones first), plus the
+ones tagged **NO INSTALADO** so you can remove them with the controller. Everything else (artwork
 source, Big Picture, replace) is taken from the full window, **Modo avanzado** ("advanced
 mode"). The app opens in the last mode you used. After adding successfully, the app **closes
 itself**, because the restarted Steam would cover it. If something fails, it stays open and
@@ -137,7 +160,8 @@ to `www.steamgriddb.com`, sending the game name or Store id, your Windows countr
 and your SteamGridDB key.
 
 Everything it keeps stays on your PC: the SteamGridDB key (in plain text) and the games you
-picked by hand for the artwork (each with the path of the game's executable) in
+picked by hand for the artwork (each with the path of the game's executable), your checkbox
+settings and the fingerprints of the games already seen (no paths) in
 `%LOCALAPPDATA%\VaporeraArcade\config.json`, and a log in the same folder. The log contains
 full paths, installed game names and your Steam profile id: review it before sharing it.
 
@@ -145,8 +169,9 @@ full paths, installed game names and your Steam profile id: review it before sha
 
 - Xbox / Game Pass games and Store apps: Steam shows no overlay and doesn't track play time,
   because the launcher starts the game and exits.
-- If a game's executable changes, its Steam id changes and the artwork disappears: add it
-  again with *Reemplazar si ya existe* ("replace if it exists") checked.
+- If a game's executable changes, its Steam id changes and the shortcut stops working. The
+  list tags it **CAMBIADO EN STEAM**: add it again and it is updated. If you renamed it inside
+  Steam, the app can't tell it's the same game and the old shortcut shows up on its own.
 - Steam has to be closed to edit `shortcuts.vdf`. The app closes it itself and cancels without
   changing anything if Steam doesn't close within 40 seconds.
 - The controller has to be XInput (Xbox or compatible). PlayStation and Switch controllers

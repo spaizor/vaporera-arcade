@@ -239,11 +239,101 @@ function Find-ShortcutDuplicado {
     return $null
 }
 
+# La entrada que hay que quitar para un juego. Casan las mismas que en Find-ShortcutDuplicado,
+# pero se prefiere la mas exacta: la de su nombre, exe y opciones, luego la de su exe y
+# opciones y por ultimo la de su nombre. Con dos entradas del mismo nombre (una vieja que ya
+# no arranca y la buena), la vieja sale en la lista por su cuenta y quitarla no se puede llevar
+# la buena por ir antes en el fichero. Devuelve la clave, o $null.
+function Find-ShortcutParaQuitar {
+    param($Existentes, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
+    $porExe = $null
+    $porNombre = $null
+    foreach ($e in @($Existentes)) {
+        if (-not $e) { continue }
+        $mismoNombre = ([string]$e.Nombre) -eq $Nombre
+        $mismoExe    = (([string]$e.Exe) -eq $Exe) -and (([string]$e.LaunchOptions) -eq $LaunchOptions)
+        if ($mismoNombre -and $mismoExe) { return $e.Indice }
+        if ($mismoExe -and $null -eq $porExe) { $porExe = $e.Indice }
+        if ($mismoNombre -and $null -eq $porNombre) { $porNombre = $e.Indice }
+    }
+    if ($null -ne $porExe) { return $porExe }
+    return $porNombre
+}
+
 # Lo mismo leyendo shortcuts.vdf. Es seguro con Steam abierto: solo lee.
 function Test-ShortcutDuplicado {
     param([Parameter(Mandatory)][string]$RutaVdf, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
     return (Find-ShortcutDuplicado -Existentes (Get-ShortcutsExistentes -Ruta $RutaVdf) `
                 -Nombre $Nombre -Exe $Exe -LaunchOptions $LaunchOptions)
+}
+
+# ---------------------------------------------------------------------
+#  Lo que hay en Steam frente a lo detectado
+# ---------------------------------------------------------------------
+
+# La entrada de Steam que le toca a un juego de la lista y como esta:
+#  'en-steam'  una que lo lanza tal cual (exe y opciones), aunque se llame distinto; o una con
+#              su nombre y su exe (las opciones se editaron al anadirlo)
+#  'cambiado'  una con su nombre pero otro exe: el juego se ha movido o una actualizacion le ha
+#              cambiado el ejecutable, y la de Steam ya no lo arranca
+#  ''          ninguna
+# Casa con lo mismo que Find-ShortcutDuplicado (nombre, o exe con opciones): lo que no es ''
+# es lo que la escritura toma por duplicado. Devuelve Estado y Entrada (de ConvertTo-ShortcutInfo).
+function Get-EstadoEnSteam {
+    param($Existentes, [string]$Nombre, [string]$Exe, [string]$LaunchOptions = '')
+    $porNombre = $null
+    foreach ($e in @($Existentes)) {
+        if (-not $e) { continue }
+        if (([string]$e.Exe) -eq $Exe -and ([string]$e.LaunchOptions) -eq $LaunchOptions) {
+            return [pscustomobject]@{ Estado = 'en-steam'; Entrada = $e }
+        }
+        if ($null -eq $porNombre -and ([string]$e.Nombre) -eq $Nombre) { $porNombre = $e }
+    }
+    if ($null -eq $porNombre) { return [pscustomobject]@{ Estado = ''; Entrada = $null } }
+    $estado = $(if (([string]$porNombre.Exe) -eq $Exe) { 'en-steam' } else { 'cambiado' })
+    return [pscustomobject]@{ Estado = $estado; Entrada = $porNombre }
+}
+
+# Las entradas de Steam que no le tocan a ningun juego de $Juegos (la de cada uno la dice
+# Get-EstadoEnSteam). $Excluir: objetos con Nombre, Exe y LaunchOptions cuyas entradas no se
+# devuelven aunque no le toquen a nadie (la propia Vaporera, que tiene su boton).
+function Get-EntradasSinJuego {
+    param($Existentes, [object[]]$Juegos = @(), [object[]]$Excluir = @())
+    $suyas = @{}
+    foreach ($j in @($Juegos)) {
+        if (-not $j) { continue }
+        $r = Get-EstadoEnSteam -Existentes $Existentes -Nombre $j.Nombre -Exe $j.Exe -LaunchOptions ([string]$j.LaunchOptions)
+        if ($r.Entrada) { $suyas[[string]$r.Entrada.Indice] = $true }
+    }
+    $lista = @()
+    foreach ($e in @($Existentes)) {
+        if (-not $e -or $suyas.ContainsKey([string]$e.Indice)) { continue }
+        $fuera = $false
+        foreach ($x in @($Excluir)) {
+            if (-not $x) { continue }
+            if (([string]$e.Nombre) -eq $x.Nombre -or
+                (([string]$e.Exe) -eq $x.Exe -and ([string]$e.LaunchOptions) -eq [string]$x.LaunchOptions)) { $fuera = $true; break }
+        }
+        if (-not $fuera) { $lista += $e }
+    }
+    return $lista
+}
+
+# Si una entrada que no le toca a ningun juego detectado es de uno que ya no esta: su exe no
+# existe, o se lanza por la URI de una tienda que la busqueda mira siempre (Epic, Ubisoft) y no
+# lo ha encontrado. Lo demas (un programa anadido a mano, una app de la Store con su casilla
+# quitada) puede seguir ahi. $Unidades: las raices que se pueden mirar sin miedo (las fijas,
+# Get-UnidadesFijas); en una de red desconectada Test-Path tarda segundos, asi que con un exe
+# fuera de ellas no se sabe y se devuelve $false.
+function Test-EntradaNoInstalada {
+    param([Parameter(Mandatory)]$Entrada, [string[]]$Unidades = @())
+    if (([string]$Entrada.LaunchOptions) -match '^(uplay|com\.epicgames\.launcher)://') { return $true }
+    $exe = [string]$Entrada.Exe
+    if (-not $exe) { return $false }
+    $enFija = $false
+    foreach ($u in @($Unidades)) { if ($u -and $exe.StartsWith($u, [StringComparison]::OrdinalIgnoreCase)) { $enFija = $true; break } }
+    if (-not $enFija) { return $false }
+    try { return (-not (Test-Path -LiteralPath $exe -PathType Leaf)) } catch { return $false }
 }
 
 # ---------------------------------------------------------------------
@@ -341,8 +431,9 @@ function New-ResultadoCambio {
 
 # $Root es lo que devuelve Read-BinaryVdf y se modifica. $Bajas: objetos con Nombre, Exe y
 # LaunchOptions (los de la lista); de cada uno se quita la entrada con la que casa, con el mismo
-# criterio que la marca 'YA EN STEAM' (Find-ShortcutDuplicado). $Altas: objetos con Nombre,
-# Exe, StartDir, Icono y LaunchOptions. Primero las bajas, que renumeran las claves 0..n-1 como
+# criterio que la marca 'YA EN STEAM' y prefiriendo la mas exacta (Find-ShortcutParaQuitar).
+# $Altas: objetos con Nombre, Exe, StartDir, Icono, LaunchOptions y, si se quiere reemplazar
+# solo esa, Reemplazar. Primero las bajas, que renumeran las claves 0..n-1 como
 # Steam, y luego las altas. Cada cambio va por su cuenta: el que no se puede hacer, o falla, se
 # anota y los demas siguen. Devuelve un resultado por cambio, en el orden recibido: Ok, Motivo
 # ('no-esta', 'duplicado', 'repetido' entre los propios elegidos, o el mensaje del error),
@@ -368,7 +459,7 @@ function Invoke-CambiosShortcuts {
             # las ya quitadas en este lote no cuentan: dos marcados que casan con la misma
             # entrada no la quitan "dos veces"
             $restantes = @(ConvertTo-ShortcutInfo -Shortcuts $sc | Where-Object { -not $quitar.ContainsKey([string]$_.Indice) })
-            $clave = Find-ShortcutDuplicado -Existentes $restantes -Nombre $b.Nombre -Exe $b.Exe -LaunchOptions ([string]$b.LaunchOptions)
+            $clave = Find-ShortcutParaQuitar -Existentes $restantes -Nombre $b.Nombre -Exe $b.Exe -LaunchOptions ([string]$b.LaunchOptions)
             if ($null -eq $clave) { $r.Motivo = 'no-esta' }
             else {
                 $info = $restantes | Where-Object { $_.Indice -eq $clave } | Select-Object -First 1
@@ -401,7 +492,9 @@ function Invoke-CambiosShortcuts {
             } else {
                 $info = @(ConvertTo-ShortcutInfo -Shortcuts $sc)
                 $clave = Find-ShortcutDuplicado -Existentes $info -Nombre $a.Nombre -Exe $a.Exe -LaunchOptions $opciones
-                if ($null -ne $clave -and -not $Reemplazar) {
+                # cada alta puede pedir el suyo: la de un juego que ha cambiado de exe se
+                # actualiza aunque no se haya pedido reemplazar todos
+                if ($null -ne $clave -and -not ($Reemplazar -or [bool]$a.Reemplazar)) {
                     $r.Motivo = 'duplicado'; $r.Clave = [string]$clave
                 } else {
                     $entrada = New-EntradaShortcut -AppId $r.AppId -Nombre $a.Nombre -Exe $a.Exe -StartDir $a.StartDir `
